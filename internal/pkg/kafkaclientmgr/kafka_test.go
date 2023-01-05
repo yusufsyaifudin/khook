@@ -1,4 +1,4 @@
-package kafkamgr
+package kafkaclientmgr
 
 import "testing"
 

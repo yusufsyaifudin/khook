@@ -4,16 +4,18 @@ import (
 	"context"
 	"fmt"
 	"github.com/Shopify/sarama"
-	"github.com/yusufsyaifudin/khook/internal/pkg/kafkamgr"
+	"github.com/hashicorp/go-multierror"
+	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/storage"
+	"io"
 	"sync"
 	"time"
 )
 
 type ConsumerManagerConfig struct {
-	KafkaConnStore storage.KafkaConnStore
-	WebhookStore   storage.WebhookStore
-	Consumer       *kafkamgr.Kafka
+	KafkaConnStore     storage.KafkaConnStore
+	WebhookStore       storage.WebhookStore
+	KafkaClientManager *kafkaclientmgr.KafkaClientManager
 }
 
 type ConsumerManager struct {
@@ -22,13 +24,16 @@ type ConsumerManager struct {
 	ticker          *time.Ticker
 	mKafkaConsGroup sync.RWMutex
 
-	// kafkaConsGroup contains Kafka ConsumerGroup connection with the Webhook label as key.
+	// kafkaConsGroup contains KafkaClientManager ConsumerGroup connection with the Webhook label as key.
 	// Webhook label must be unique.
 	kafkaConsGroup map[string]sarama.ConsumerGroup
 
-	// kafkaPausedConsGroup contains paused Kafka ConsumerGroup connection.
+	// kafkaPausedConsGroup contains paused KafkaClientManager ConsumerGroup connection.
 	kafkaPausedConsGroup map[string]sarama.ConsumerGroup
 }
+
+var _ Consumer = (*ConsumerManager)(nil)
+var _ io.Closer = (*ConsumerManager)(nil)
 
 func NewConsumerManager(cfg ConsumerManagerConfig) (*ConsumerManager, error) {
 	mgr := &ConsumerManager{
@@ -44,6 +49,34 @@ func NewConsumerManager(cfg ConsumerManagerConfig) (*ConsumerManager, error) {
 	return mgr, nil
 }
 
+func (c *ConsumerManager) Close() error {
+	c.mKafkaConsGroup.Lock()
+	defer c.mKafkaConsGroup.Unlock()
+
+	var errCum error
+	for consGroupName, consGroup := range c.kafkaConsGroup {
+		if consGroup == nil {
+			continue
+		}
+		_err := consGroup.Close()
+		if _err != nil {
+			errCum = multierror.Append(errCum, fmt.Errorf("consumer group '%s': %w", consGroupName, _err))
+		}
+	}
+
+	for consGroupName, consGroup := range c.kafkaPausedConsGroup {
+		if consGroup == nil {
+			continue
+		}
+		_err := consGroup.Close()
+		if _err != nil {
+			errCum = multierror.Append(errCum, fmt.Errorf("consumer group '%s': %w", consGroupName, _err))
+		}
+	}
+
+	return errCum
+}
+
 func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfig) (out OutAddKafkaConfig, err error) {
 	outPersist, err := c.Config.KafkaConnStore.PersistKafkaConfig(ctx, storage.InputPersistKafkaConfig{
 		KafkaConfig: storage.KafkaConfig{
@@ -52,6 +85,11 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 		},
 	})
 
+	if err != nil {
+		return
+	}
+
+	err = c.Config.KafkaClientManager.AddConnection(ctx, outPersist.KafkaConfig)
 	if err != nil {
 		return
 	}
@@ -65,7 +103,7 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 
 // GetActiveKafkaConfigs get all active kafka consumer.
 func (c *ConsumerManager) GetActiveKafkaConfigs(ctx context.Context) (out OutGetActiveKafkaConfigs) {
-	outKafkaConfig := c.Config.Consumer.GetAllConn(ctx)
+	outKafkaConfig := c.Config.KafkaClientManager.GetAllConn(ctx)
 	out = OutGetActiveKafkaConfigs{
 		KafkaConfigs: outKafkaConfig,
 	}
@@ -95,14 +133,19 @@ func (c *ConsumerManager) AddWebhook(ctx context.Context, in InputAddWebhook) (o
 
 // GetWebhooks get all registered webhook in the database.
 func (c *ConsumerManager) GetWebhooks(ctx context.Context) (out OutGetWebhooks, err error) {
-	outGetWebhook, err := c.Config.WebhookStore.GetWebhooks(ctx, storage.InputGetWebhooks{})
+	outGetWebhook, err := c.Config.WebhookStore.GetWebhooks(ctx)
 	if err != nil {
 		return
 	}
 
 	webhooks := make([]storage.Webhook, 0)
 	for outGetWebhook.Next() {
-		webhooks = append(webhooks, outGetWebhook.Webhook())
+		webhook, _err := outGetWebhook.Webhook()
+		if _err != nil {
+			err = fmt.Errorf("iterating webhook row: %s", _err)
+			return
+		}
+		webhooks = append(webhooks, webhook)
 	}
 
 	out = OutGetWebhooks{

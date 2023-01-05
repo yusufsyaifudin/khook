@@ -8,6 +8,7 @@ import (
 	"github.com/yusufsyaifudin/khook/pkg/respbuilder"
 	"github.com/yusufsyaifudin/khook/storage"
 	"net/http"
+	"runtime"
 )
 
 const (
@@ -17,14 +18,14 @@ const (
 	RouteResumeRegisteredWebhooks = "/webhooks/{label}/resume"
 	RoutePutKafka                 = "/kafka/{label}"
 
+	RouteGetStatsSystem         = "/stats/system"
 	RouteGetStatsActiveKafka    = "/stats/active-kafka"
 	RouteGetStatsActiveWebhooks = "/stats/active-webhooks"
 	RouteGetStatsPausedWebhooks = "/stats/paused-webhooks"
 )
 
 type HttpCfg struct {
-	//ConsumerKafka   *kafkamgr.Kafka
-	ConsumerManager *resourcemgr.ConsumerManager
+	ConsumerManager resourcemgr.Consumer
 }
 
 type HTTP struct {
@@ -134,6 +135,28 @@ func (h *HTTP) registerRoutes() {
 		}
 
 		respBody := respbuilder.Success(ctx, outResume)
+		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
+		return
+	})
+
+	h.router.Get(RouteGetStatsSystem, func(w http.ResponseWriter, r *http.Request) {
+		var bToMb = func(b uint64) uint64 {
+			return b / 1024 / 1024
+		}
+
+		ctx := r.Context()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+
+		stats := map[string]any{
+			"num_gc":      m.NumGC,
+			"alloc":       bToMb(m.Alloc),
+			"total_alloc": bToMb(m.TotalAlloc),
+			"heap_alloc":  bToMb(m.HeapAlloc),
+			"sys":         bToMb(m.Sys),
+		}
+
+		respBody := respbuilder.Success(ctx, stats)
 		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
 		return
 	})

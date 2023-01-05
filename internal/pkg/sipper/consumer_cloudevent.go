@@ -21,18 +21,17 @@ import (
 // CloudEventSink represents a Sarama consumer group consumer
 type CloudEventSink struct {
 	webhookCfg             storage.Webhook
-	isUp                   chan bool
+	isConnUpOrErr          chan error
 	underlyingConn         sarama.Client
 	cloudEventHTTPProtocol protocol.Sender
-	//cloudEventsClient      cloudeventsClient.Client
 }
 
 var _ sarama.ConsumerGroupHandler = (*CloudEventSink)(nil)
 
-func NewCloudEventSink(webhookCfg storage.Webhook, up chan bool, underlyingConn sarama.Client) *CloudEventSink {
+func NewCloudEventSink(webhookCfg storage.Webhook, connectionErr chan error, underlyingConn sarama.Client) *CloudEventSink {
 	return &CloudEventSink{
 		webhookCfg:     webhookCfg,
-		isUp:           up,
+		isConnUpOrErr:  connectionErr,
 		underlyingConn: underlyingConn,
 	}
 }
@@ -44,6 +43,14 @@ func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
 	cloudEventHTTPProtocol, err := cloudevents.NewHTTP(
 		cloudevents.WithShutdownTimeout(30*time.Second),
 		cloudevents.WithHeader("webhook-label", c.webhookCfg.Label),
+		cloudevents.WithRoundTripper(http.DefaultTransport), // TODO: setup logging
+		cehttp.WithIsRetriableFunc(func(statusCode int) bool {
+			if statusCode >= 400 {
+				return true
+			}
+
+			return false
+		}),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot prepare cloud event for webhook label '%s': %w", c.webhookCfg.Label, err)
@@ -51,9 +58,7 @@ func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
 
 	// Mark the c as ready
 	c.cloudEventHTTPProtocol = cloudEventHTTPProtocol
-	//c.cloudEventsClient = cloudEventClient
-	c.isUp <- true
-
+	c.isConnUpOrErr <- nil
 	return nil
 }
 
@@ -107,7 +112,7 @@ func (c *CloudEventSink) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				cloudEvent.SetID(uuid.New().String())
 				cloudEvent.SetTime(time.Now())
 				cloudEvent.SetType(c.webhookCfg.WebhookSink.CEType)
-				cloudEvent.SetSource(oriMsg.Topic) // source containing Kafka topic
+				cloudEvent.SetSource(fmt.Sprintf("%s:%d:%d", oriMsg.Topic, oriMsg.Partition, oriMsg.Offset)) // source containing Kafka topic
 
 				// setting the content type if it blanks
 				if kafkaMessage.ContentType == "" {

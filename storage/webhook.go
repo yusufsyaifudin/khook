@@ -4,7 +4,7 @@ import "context"
 
 type WebhookStore interface {
 	PersistWebhook(ctx context.Context, in InputPersistWebhook) (out OutInputPersistWebhook, err error)
-	GetWebhooks(ctx context.Context, in InputGetWebhooks) (out WebhookRows, err error)
+	GetWebhooks(ctx context.Context) (out WebhookRows, err error)
 	GetWebhookByLabel(ctx context.Context, label string) (out Webhook, err error)
 }
 
@@ -45,9 +45,7 @@ type OutInputPersistWebhook struct {
 	Webhook Webhook
 }
 
-type InputGetWebhooks struct{}
-
 type WebhookRows interface {
 	Next() bool
-	Webhook() Webhook
+	Webhook() (Webhook, error)
 }

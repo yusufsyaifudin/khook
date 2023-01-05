@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/yusufsyaifudin/khook/internal/pkg/kafkamgr"
+	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/svc/resourcemgr"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
 	"github.com/yusufsyaifudin/khook/transport"
@@ -22,9 +22,10 @@ func main() {
 	inMemKafkaConnStore := inmem.NewKafkaConnStore()
 	inMemWebhookStore := inmem.NewWebhookStore()
 
-	consumerKafka, err := kafkamgr.NewKafka(
-		kafkamgr.WithConnStore(inMemKafkaConnStore),
-		kafkamgr.WithRebuildConnInterval(3*time.Second),
+	consumerKafka, err := kafkaclientmgr.NewKafkaClientManager(
+		kafkaclientmgr.WithConnStore(inMemKafkaConnStore),
+		kafkaclientmgr.WithRefreshConnInterval(3*time.Second),
+		kafkaclientmgr.WithUpdateConnInterval(10*time.Second),
 	)
 	if err != nil {
 		log.Fatalln(err)
@@ -32,9 +33,9 @@ func main() {
 	}
 
 	consumerMgr, err := resourcemgr.NewConsumerManager(resourcemgr.ConsumerManagerConfig{
-		KafkaConnStore: inMemKafkaConnStore,
-		WebhookStore:   inMemWebhookStore,
-		Consumer:       consumerKafka,
+		KafkaConnStore:     inMemKafkaConnStore,
+		WebhookStore:       inMemWebhookStore,
+		KafkaClientManager: consumerKafka,
 	})
 	if err != nil {
 		log.Fatalln(err)
@@ -69,6 +70,14 @@ func main() {
 		log.Println("http transport: exiting...")
 		if _err := httpServer.Shutdown(ctx); _err != nil {
 			log.Println("http transport", _err)
+		}
+
+		if _err := consumerMgr.Close(); _err != nil {
+			log.Fatalln("error close client kafka", _err)
+		}
+
+		if _err := consumerKafka.Close(); _err != nil {
+			log.Fatalln("error close consumer kafka", _err)
 		}
 
 	case _err := <-apiErrChan:

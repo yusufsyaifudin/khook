@@ -3,6 +3,7 @@ package sipper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/Shopify/sarama"
 	"log"
 	"time"
@@ -12,6 +13,7 @@ type InputInitConsumer struct {
 	ConsumerGroup sarama.ConsumerGroup
 	Topic         string
 	Processor     sarama.ConsumerGroupHandler
+	ErrorChan     chan error
 }
 
 func InitConsumer(ctx context.Context, in *InputInitConsumer) {
@@ -29,6 +31,7 @@ func InitConsumer(ctx context.Context, in *InputInitConsumer) {
 
 			if err != nil {
 				log.Printf("Error from consumer: %v\n", err)
+				in.ErrorChan <- err
 				return
 			}
 
@@ -36,6 +39,7 @@ func InitConsumer(ctx context.Context, in *InputInitConsumer) {
 			case <-time.After(5 * time.Second):
 				log.Println("CloudEventSink group returned, Rebalancing.")
 			case <-ctx.Done():
+				in.ErrorChan <- fmt.Errorf("CloudEventSink group cancelled. Stopping")
 				log.Println("CloudEventSink group cancelled. Stopping")
 				return
 			}
@@ -58,17 +62,14 @@ func handleConsumerErr(ctx, sessionCtx context.Context, sessionCtxCancel context
 				return
 			}
 
-			if err != nil {
-				log.Printf("error during execution of consumer group: %v\n", err)
+			var errProc *sarama.ConsumerError
+			if errors.As(err, &errProc) {
+				log.Printf("error processing message (non-transient), shutting down processor: %v\n", err)
 				sessionCtxCancel()
 			}
 
-			var (
-				errProc *sarama.ConsumerError
-			)
-
-			if errors.As(err, &errProc) {
-				log.Printf("error processing message (non-transient), shutting down processor: %v\n", err)
+			if err != nil {
+				log.Printf("error during execution of consumer group: %v\n", err)
 				sessionCtxCancel()
 			}
 

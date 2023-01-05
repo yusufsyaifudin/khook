@@ -2,6 +2,7 @@ package inmem
 
 import (
 	"context"
+	"io"
 	"os"
 	"sync"
 
@@ -29,7 +30,7 @@ func (w *WebhookStore) PersistWebhook(ctx context.Context, in storage.InputPersi
 	return
 }
 
-func (w *WebhookStore) GetWebhooks(ctx context.Context, in storage.InputGetWebhooks) (out storage.WebhookRows, err error) {
+func (w *WebhookStore) GetWebhooks(ctx context.Context) (out storage.WebhookRows, err error) {
 	webhooks := make([]storage.Webhook, 0)
 
 	w.store.Range(func(key, value any) bool {
@@ -53,8 +54,9 @@ func (w *WebhookStore) GetWebhookByLabel(ctx context.Context, label string) (sto
 }
 
 type WebhookRows struct {
-	lock     sync.Mutex
-	webhooks []storage.Webhook
+	lock        sync.Mutex
+	webhooks    []storage.Webhook
+	currWebhook *storage.Webhook
 }
 
 var _ storage.WebhookRows = (*WebhookRows)(nil)
@@ -64,17 +66,19 @@ func (w *WebhookRows) Next() bool {
 	defer w.lock.Unlock()
 
 	if len(w.webhooks) > 0 {
+		w.currWebhook, w.webhooks = &w.webhooks[0], w.webhooks[1:]
 		return true
 	}
 
 	return false
 }
 
-func (w *WebhookRows) Webhook() storage.Webhook {
+func (w *WebhookRows) Webhook() (storage.Webhook, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
+	if w.currWebhook == nil {
+		return storage.Webhook{}, io.ErrUnexpectedEOF
+	}
 
-	var webhook storage.Webhook
-	webhook, w.webhooks = w.webhooks[0], w.webhooks[1:]
-	return webhook
+	return *w.currWebhook, nil
 }

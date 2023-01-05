@@ -2,7 +2,7 @@ package resourcemgr
 
 import (
 	"context"
-	"github.com/yusufsyaifudin/khook/internal/pkg/kafkamgr"
+	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/storage"
 )
 
@@ -13,6 +13,7 @@ type Consumer interface {
 	GetWebhooks(ctx context.Context) (out OutGetWebhooks, err error)
 	GetActiveWebhooks(ctx context.Context) (out OutGetActiveWebhooks, err error)
 	PauseWebhook(ctx context.Context, in InPauseWebhook) (out OutPauseWebhook, err error)
+	ResumeWebhook(ctx context.Context, in InResumeWebhook) (out OutResumeWebhook, err error)
 	GetPausedWebhooks(ctx context.Context) (out OutGetPausedWebhooks, err error)
 }
 
@@ -27,7 +28,7 @@ type OutAddKafkaConfig struct {
 }
 
 type OutGetActiveKafkaConfigs struct {
-	KafkaConfigs []kafkamgr.ConnInfo `json:"kafka_configs"`
+	KafkaConfigs []kafkaclientmgr.ConnInfo `json:"kafka_configs"`
 }
 
 type InputAddWebhook struct {

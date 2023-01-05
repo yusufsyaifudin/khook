@@ -7,6 +7,7 @@ require (
 	github.com/cloudevents/sdk-go/protocol/kafka_sarama/v2 v2.12.0
 	github.com/cloudevents/sdk-go/v2 v2.12.0
 	github.com/go-chi/chi/v5 v5.0.8
+	github.com/google/go-cmp v0.5.0
 	github.com/google/uuid v1.3.0
 	golang.org/x/net v0.3.0
 )
