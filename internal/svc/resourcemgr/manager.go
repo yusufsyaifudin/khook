@@ -105,6 +105,7 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 func (c *ConsumerManager) GetActiveKafkaConfigs(ctx context.Context) (out OutGetActiveKafkaConfigs) {
 	outKafkaConfig := c.Config.KafkaClientManager.GetAllConn(ctx)
 	out = OutGetActiveKafkaConfigs{
+		Total:        len(outKafkaConfig),
 		KafkaConfigs: outKafkaConfig,
 	}
 

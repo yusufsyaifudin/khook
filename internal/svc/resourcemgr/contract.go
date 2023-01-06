@@ -28,6 +28,7 @@ type OutAddKafkaConfig struct {
 }
 
 type OutGetActiveKafkaConfigs struct {
+	Total        int                       `json:"total"`
 	KafkaConfigs []kafkaclientmgr.ConnInfo `json:"kafka_configs"`
 }
 

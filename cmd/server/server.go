@@ -3,9 +3,13 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/sony/sonyflake"
+	"github.com/yusufsyaifudin/khook/config"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/svc/resourcemgr"
+	"github.com/yusufsyaifudin/khook/storage"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
+	"github.com/yusufsyaifudin/khook/storage/postgres"
 	"github.com/yusufsyaifudin/khook/transport"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -21,11 +25,47 @@ type Server struct{}
 
 func (s *Server) Run() error {
 	ctx := context.Background()
-	inMemKafkaConnStore := inmem.NewKafkaConnStore()
+
+	cfg := &config.ServerConfig{}
+	err := cfg.Load()
+	if err != nil {
+		err = fmt.Errorf("cannot load config: %w", err)
+		return err
+	}
+
+	sf := sonyflake.NewSonyflake(sonyflake.Settings{
+		StartTime: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+
+	if sf == nil {
+		return fmt.Errorf("sonyflake instance is nil, so we cannot generate uid in our system")
+	}
+
+	if _, _err := sf.NextID(); _err != nil {
+		return fmt.Errorf("we try to generate uid using sonyflake, but it failed: %w", _err)
+	}
+
+	var kafkaConnStore storage.KafkaConnStore = inmem.NewKafkaConnStore()
 	inMemWebhookStore := inmem.NewWebhookStore()
 
+	if cfg.Storage.KafkaConnStore.Postgres != nil {
+		sqlDB, err := cfg.Storage.KafkaConnStore.Postgres.OpenConn()
+		if err != nil {
+			err = fmt.Errorf("cannot open db conn for kafka conn store: %w", err)
+			return err
+		}
+
+		kafkaConnStore, err = postgres.NewKafkaConnStore(postgres.WithDB(sqlDB), postgres.WithSonyFlake(sf))
+		if err != nil {
+			err = fmt.Errorf("cannot open db conn for kafka conn store: %w", err)
+			return err
+		}
+
+		log.Println("kafka connection store using postgres")
+	}
+
 	consumerKafka, err := kafkaclientmgr.NewKafkaClientManager(
-		kafkaclientmgr.WithConnStore(inMemKafkaConnStore),
+		kafkaclientmgr.WithConnStore(kafkaConnStore),
 		kafkaclientmgr.WithUpdateConnInterval(10*time.Second),
 	)
 	if err != nil {
@@ -34,7 +74,7 @@ func (s *Server) Run() error {
 	}
 
 	consumerMgr, err := resourcemgr.NewConsumerManager(resourcemgr.ConsumerManagerConfig{
-		KafkaConnStore:     inMemKafkaConnStore,
+		KafkaConnStore:     kafkaConnStore,
 		WebhookStore:       inMemWebhookStore,
 		KafkaClientManager: consumerKafka,
 	})

@@ -1,10 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"database/sql"
-	"github.com/caarlos0/env"
+	"fmt"
 	_ "github.com/joho/godotenv/autoload"
 	_ "github.com/lib/pq"
+	"gopkg.in/yaml.v3"
+	"os"
 )
 
 type ServerConfig struct {
@@ -20,13 +23,22 @@ type ServerConfig struct {
 }
 
 func (s *ServerConfig) Load() error {
-	tmp := &ServerConfig{}
-	err := env.Parse(tmp)
+	const configFileName = "config.yaml"
+	fileContent, err := os.ReadFile(configFileName)
+	if err != nil {
+		err = fmt.Errorf("error read file config %s: %w", configFileName, err)
+		return err
+	}
+
+	cfg := &ServerConfig{}
+	dec := yaml.NewDecoder(bytes.NewReader(fileContent))
+	dec.KnownFields(false)
+	err = dec.Decode(&cfg)
 	if err != nil {
 		return err
 	}
 
-	*s = *tmp
+	*s = *cfg
 	if s.HTTP.Port <= 0 {
 		s.HTTP.Port = 3333
 	}
@@ -38,7 +50,7 @@ type Postgres struct {
 	DSN string `yaml:"dsn"`
 }
 
-func (p *Postgres) OpenConn(db *sql.DB, err error) {
+func (p *Postgres) OpenConn() (db *sql.DB, err error) {
 	db, err = sql.Open("postgres", p.DSN)
 	return
 }

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/sony/sonyflake"
 	"github.com/yusufsyaifudin/khook/storage"
 	"io"
 	"sync"
@@ -19,13 +20,13 @@ import (
 
 const (
 	SqlPersist = `
-INSERT INTO kafka_configs (id, label, KafkaConnStoreConfig, config_checksum, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) 
+INSERT INTO kafka_configs (id, label, config, config_checksum, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) 
 ON CONFLICT (LOWER(label), deleted_at) 
 DO UPDATE SET 
-   KafkaConnStoreConfig = EXCLUDED.KafkaConnStoreConfig,
+   config = EXCLUDED.config,
    config_checksum = EXCLUDED.config_checksum,
    updated_at = EXCLUDED.updated_at 
-WHERE LOWER(apps.client_id) = $2 AND apps.deleted_at = 0 
+WHERE LOWER(kafka_configs.label) = $2 AND kafka_configs.deleted_at = 0 
 RETURNING *;
 `
 
@@ -50,6 +51,7 @@ type Option func(*KafkaConnStoreConfig) error
 
 type KafkaConnStoreConfig struct {
 	DB *sql.DB
+	SF *sonyflake.Sonyflake
 }
 
 func defaultConfig() *KafkaConnStoreConfig {
@@ -63,6 +65,17 @@ func WithDB(db *sql.DB) Option {
 		}
 
 		c.DB = db
+		return nil
+	}
+}
+
+func WithSonyFlake(sf *sonyflake.Sonyflake) Option {
+	return func(c *KafkaConnStoreConfig) error {
+		if sf == nil {
+			return fmt.Errorf("empty sonyflake instance")
+		}
+
+		c.SF = sf
 		return nil
 	}
 }
@@ -108,7 +121,11 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 		return
 	}
 
-	id := 123
+	id, err := k.config.SF.NextID()
+	if err != nil {
+		err = fmt.Errorf("cannot generate distributed unique id: %w", err)
+		return
+	}
 
 	h := sha256.New()
 	_, err = io.Copy(h, bytes.NewReader(kafkaCfg))
@@ -121,7 +138,7 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 	nowMicro := time.Now().UnixMicro()
 
 	var kafkaConfigOut KafkaConfigTable
-	err = sqlx.SelectContext(ctx, k.db, &kafkaConfigOut, SqlPersist,
+	err = sqlx.GetContext(ctx, k.db, &kafkaConfigOut, SqlPersist,
 		id, in.KafkaConfig.Label, kafkaCfg, checkSum, nowMicro, nowMicro,
 	)
 	if err != nil {
