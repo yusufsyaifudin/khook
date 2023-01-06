@@ -47,5 +47,5 @@ type OutInputPersistWebhook struct {
 
 type WebhookRows interface {
 	Next() bool
-	Webhook() (Webhook, error)
+	Webhook() (w Webhook, checksum string, err error)
 }

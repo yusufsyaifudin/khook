@@ -81,7 +81,7 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 	outPersist, err := c.Config.KafkaConnStore.PersistKafkaConfig(ctx, storage.InputPersistKafkaConfig{
 		KafkaConfig: storage.KafkaConfig{
 			Label:   in.Label,
-			Address: in.Address,
+			Brokers: in.Address,
 		},
 	})
 
@@ -89,7 +89,7 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 		return
 	}
 
-	err = c.Config.KafkaClientManager.AddConnection(ctx, outPersist.KafkaConfig)
+	err = c.Config.KafkaClientManager.AddConnection(ctx, outPersist.KafkaConfig, outPersist.CheckSum)
 	if err != nil {
 		return
 	}
@@ -140,7 +140,7 @@ func (c *ConsumerManager) GetWebhooks(ctx context.Context) (out OutGetWebhooks, 
 
 	webhooks := make([]storage.Webhook, 0)
 	for outGetWebhook.Next() {
-		webhook, _err := outGetWebhook.Webhook()
+		webhook, _, _err := outGetWebhook.Webhook()
 		if _err != nil {
 			err = fmt.Errorf("iterating webhook row: %s", _err)
 			return

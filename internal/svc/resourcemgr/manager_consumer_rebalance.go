@@ -23,7 +23,7 @@ func (c *ConsumerManager) manageConsumers() {
 			}
 
 			for outGetWebhook.Next() {
-				webhook, _err := outGetWebhook.Webhook()
+				webhook, _, _err := outGetWebhook.Webhook()
 				if _err != nil {
 					log.Printf("getting webhook row error: %s\n", _err)
 					continue
@@ -87,10 +87,10 @@ func (c *ConsumerManager) manageConsumers() {
 					ErrorChan:     isConnUpOrErr,
 				})
 
-				isUp := <-isConnUpOrErr
+				connErr := <-isConnUpOrErr
 
 				log.Println("[done] register webhook consumer", webhook.Label)
-				if isUp == nil {
+				if connErr == nil {
 					log.Printf("add webhook %s to kafka %s success\n",
 						webhook.Label,
 						webhookSrc.KafkaConfigLabel,
@@ -99,7 +99,14 @@ func (c *ConsumerManager) manageConsumers() {
 					c.mKafkaConsGroup.Lock()
 					c.kafkaConsGroup[webhook.Label] = kafkaConsumerGroup
 					c.mKafkaConsGroup.Unlock()
+					continue
 				}
+
+				log.Printf("add webhook %s to kafka %s failed: %s\n",
+					webhook.Label,
+					webhookSrc.KafkaConfigLabel,
+					connErr,
+				)
 
 				continue
 			}

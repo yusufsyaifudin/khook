@@ -1,0 +1,6 @@
+# use https://github.com/rubenv/sql-migrate
+postgres:
+  dialect: postgres
+  datasource: user=postgres password=postgres host=localhost port=5433 dbname=khook sslmode=disable
+  dir: storage/postgres/migrations
+  table: migrations_khook

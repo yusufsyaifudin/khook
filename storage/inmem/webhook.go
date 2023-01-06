@@ -1,7 +1,11 @@
 package inmem
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -73,12 +77,26 @@ func (w *WebhookRows) Next() bool {
 	return false
 }
 
-func (w *WebhookRows) Webhook() (storage.Webhook, error) {
+func (w *WebhookRows) Webhook() (storage.Webhook, string, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currWebhook == nil {
-		return storage.Webhook{}, io.ErrUnexpectedEOF
+		return storage.Webhook{}, "", io.ErrUnexpectedEOF
 	}
 
-	return *w.currWebhook, nil
+	b, err := json.Marshal(w.currWebhook)
+	if err != nil {
+		return storage.Webhook{}, "", err
+	}
+
+	h := sha256.New()
+	_, err = io.Copy(h, bytes.NewReader(b))
+	if err != nil {
+		err = fmt.Errorf("cannot copy to calculate KafkaConnStoreConfig checksum: %w", err)
+		return storage.Webhook{}, "", err
+	}
+
+	checkSum := string(h.Sum(nil))
+
+	return *w.currWebhook, checkSum, nil
 }

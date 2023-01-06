@@ -1,7 +1,12 @@
 package inmem
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"sync"
 
@@ -70,12 +75,25 @@ func (w *KafkaConfigRows) Next() bool {
 	return false
 }
 
-func (w *KafkaConfigRows) KafkaConfig() (storage.KafkaConfig, error) {
+func (w *KafkaConfigRows) KafkaConfig() (storage.KafkaConfig, string, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currKafkaConfig == nil {
-		return storage.KafkaConfig{}, io.ErrUnexpectedEOF
+		return storage.KafkaConfig{}, "", io.ErrUnexpectedEOF
 	}
 
-	return *w.currKafkaConfig, nil
+	b, err := json.Marshal(w.currKafkaConfig)
+	if err != nil {
+		return storage.KafkaConfig{}, "", err
+	}
+
+	h := sha256.New()
+	_, err = io.Copy(h, bytes.NewReader(b))
+	if err != nil {
+		err = fmt.Errorf("cannot copy to calculate KafkaConnStoreConfig checksum: %w", err)
+		return storage.KafkaConfig{}, "", err
+	}
+
+	checkSum := hex.EncodeToString(h.Sum(nil))
+	return *w.currKafkaConfig, checkSum, nil
 }
