@@ -41,18 +41,6 @@ func WithConnStore(store storage.KafkaConnStore) KafkaOpt {
 		return nil
 	}
 }
-
-func WithRefreshConnInterval(interval time.Duration) KafkaOpt {
-	return func(opt *kafkaOpt) error {
-		if interval.Seconds() <= 0 {
-			return nil
-		}
-
-		opt.refreshConnEvery = interval
-		return nil
-	}
-}
-
 func WithUpdateConnInterval(interval time.Duration) KafkaOpt {
 	return func(opt *kafkaOpt) error {
 		if interval.Seconds() <= 0 {

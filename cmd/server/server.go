@@ -26,7 +26,6 @@ func (s *Server) Run() error {
 
 	consumerKafka, err := kafkaclientmgr.NewKafkaClientManager(
 		kafkaclientmgr.WithConnStore(inMemKafkaConnStore),
-		kafkaclientmgr.WithRefreshConnInterval(3*time.Second),
 		kafkaclientmgr.WithUpdateConnInterval(10*time.Second),
 	)
 	if err != nil {
