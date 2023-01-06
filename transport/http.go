@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/go-chi/chi/v5"
-	"github.com/yusufsyaifudin/khook/internal/svc/resourcemgr"
+	"github.com/yusufsyaifudin/khook/internal/svc/resourcesvc"
 	"github.com/yusufsyaifudin/khook/pkg/respbuilder"
 	"github.com/yusufsyaifudin/khook/storage"
 	"net/http"
@@ -25,7 +25,7 @@ const (
 )
 
 type HttpCfg struct {
-	ConsumerManager resourcemgr.Consumer
+	ResourceSvc resourcesvc.ResourceService
 }
 
 type HTTP struct {
@@ -52,7 +52,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Get(RouteGetRegisteredWebhooks, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		outGetWebhooks, err := h.Cfg.ConsumerManager.GetWebhooks(ctx)
+		outGetWebhooks, err := h.Cfg.ResourceSvc.GetWebhooks(ctx)
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -67,7 +67,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Put(RouteAddRegisteredWebhooks, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var reqBody storage.Webhook
+		var reqBody storage.SinkTarget
 		bodyDec := json.NewDecoder(r.Body)
 		err := bodyDec.Decode(&reqBody)
 		if err != nil {
@@ -83,7 +83,7 @@ func (h *HTTP) registerRoutes() {
 			return
 		}
 
-		outAdd, err := h.Cfg.ConsumerManager.AddWebhook(ctx, resourcemgr.InputAddWebhook{Webhook: reqBody})
+		outAdd, err := h.Cfg.ResourceSvc.AddWebhook(ctx, resourcesvc.InputAddWebhook{Webhook: reqBody})
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -105,7 +105,7 @@ func (h *HTTP) registerRoutes() {
 			return
 		}
 
-		outPause, err := h.Cfg.ConsumerManager.PauseWebhook(ctx, resourcemgr.InPauseWebhook{Label: webhookLabel})
+		outPause, err := h.Cfg.ResourceSvc.PauseWebhook(ctx, resourcesvc.InPauseWebhook{Label: webhookLabel})
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -127,7 +127,7 @@ func (h *HTTP) registerRoutes() {
 			return
 		}
 
-		outResume, err := h.Cfg.ConsumerManager.ResumeWebhook(ctx, resourcemgr.InResumeWebhook{Label: webhookLabel})
+		outResume, err := h.Cfg.ResourceSvc.ResumeWebhook(ctx, resourcesvc.InResumeWebhook{Label: webhookLabel})
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -163,7 +163,7 @@ func (h *HTTP) registerRoutes() {
 
 	h.router.Get(RouteGetStatsActiveKafka, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		conn := h.Cfg.ConsumerManager.GetActiveKafkaConfigs(ctx)
+		conn := h.Cfg.ResourceSvc.GetActiveKafkaConfigs(ctx)
 		respBody := respbuilder.Success(ctx, conn)
 		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
 		return
@@ -172,7 +172,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Put(RoutePutKafka, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var reqBody resourcemgr.InAddKafkaConfig
+		var reqBody resourcesvc.InAddKafkaConfig
 		bodyDec := json.NewDecoder(r.Body)
 		err := bodyDec.Decode(&reqBody)
 		if err != nil {
@@ -188,7 +188,7 @@ func (h *HTTP) registerRoutes() {
 			return
 		}
 
-		outAdd, err := h.Cfg.ConsumerManager.AddKafkaConfig(ctx, reqBody)
+		outAdd, err := h.Cfg.ResourceSvc.AddKafkaConfig(ctx, reqBody)
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -203,7 +203,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Get(RouteGetStatsActiveWebhooks, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		activeWebhooks, err := h.Cfg.ConsumerManager.GetActiveWebhooks(ctx)
+		activeWebhooks, err := h.Cfg.ResourceSvc.GetActiveConsumers(ctx)
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
@@ -218,7 +218,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Get(RouteGetStatsPausedWebhooks, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		activeWebhooks, err := h.Cfg.ConsumerManager.GetPausedWebhooks(ctx)
+		activeWebhooks, err := h.Cfg.ResourceSvc.GetPausedWebhooks(ctx)
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)

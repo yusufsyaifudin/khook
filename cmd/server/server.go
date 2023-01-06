@@ -6,7 +6,8 @@ import (
 	"github.com/sony/sonyflake"
 	"github.com/yusufsyaifudin/khook/config"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
-	"github.com/yusufsyaifudin/khook/internal/svc/resourcemgr"
+	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
+	"github.com/yusufsyaifudin/khook/internal/svc/resourcesvc"
 	"github.com/yusufsyaifudin/khook/storage"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
 	"github.com/yusufsyaifudin/khook/storage/postgres"
@@ -46,7 +47,7 @@ func (s *Server) Run() error {
 	}
 
 	var kafkaConnStore storage.KafkaConnStore = inmem.NewKafkaConnStore()
-	inMemWebhookStore := inmem.NewWebhookStore()
+	var kafkaConsumerStore storage.KafkaConsumerStore = inmem.NewKafkaConsumerStore()
 
 	if cfg.Storage.KafkaConnStore.Postgres != nil {
 		sqlDB, err := cfg.Storage.KafkaConnStore.Postgres.OpenConn()
@@ -64,7 +65,9 @@ func (s *Server) Run() error {
 		log.Println("kafka connection store using postgres")
 	}
 
-	consumerKafka, err := kafkaclientmgr.NewKafkaClientManager(
+	// ** Prepare Kafka client connection manager
+	var kafkaClientManager kafkaclientmgr.Manager
+	kafkaClientManager, err = kafkaclientmgr.NewKafkaClientManager(
 		kafkaclientmgr.WithConnStore(kafkaConnStore),
 		kafkaclientmgr.WithUpdateConnInterval(10*time.Second),
 	)
@@ -73,18 +76,30 @@ func (s *Server) Run() error {
 		return err
 	}
 
-	consumerMgr, err := resourcemgr.NewConsumerManager(resourcemgr.ConsumerManagerConfig{
-		KafkaConnStore:     kafkaConnStore,
-		WebhookStore:       inMemWebhookStore,
-		KafkaClientManager: consumerKafka,
+	var kafkaConsumerManager kafkaconsumermgr.Manager
+	kafkaConsumerManager, err = kafkaconsumermgr.NewKafkaConsumerManager(
+		kafkaconsumermgr.WithConnStore(kafkaConsumerStore),
+		kafkaconsumermgr.WithClientConnectionManager(kafkaClientManager),
+		kafkaconsumermgr.WithUpdateInterval(3*time.Second),
+	)
+	if err != nil {
+		err = fmt.Errorf("cannot prepare kafka consumer manager: %w", err)
+		return err
+	}
+
+	resourceSvc, err := resourcesvc.NewResourceService(resourcesvc.ConsumerManagerConfig{
+		KafkaConnStore:       kafkaConnStore,
+		KafkaConsumerStore:   kafkaConsumerStore,
+		KafkaClientManager:   kafkaClientManager,
+		KafkaConsumerManager: kafkaConsumerManager,
 	})
 	if err != nil {
-		err = fmt.Errorf("cannot prepare webhook consumer manager: %w", err)
+		err = fmt.Errorf("cannot prepare resource service: %w", err)
 		return err
 	}
 
 	transportHTTP := transport.NewHTTP(transport.HttpCfg{
-		ConsumerManager: consumerMgr,
+		ResourceSvc: resourceSvc,
 	})
 
 	httpPort := fmt.Sprintf(":%d", 3333)
@@ -113,11 +128,11 @@ func (s *Server) Run() error {
 			log.Println("http transport", _err)
 		}
 
-		if _err := consumerMgr.Close(); _err != nil {
+		if _err := kafkaConsumerManager.Close(); _err != nil {
 			log.Fatalln("error close client kafka", _err)
 		}
 
-		if _err := consumerKafka.Close(); _err != nil {
+		if _err := kafkaClientManager.Close(); _err != nil {
 			log.Fatalln("error close consumer kafka", _err)
 		}
 

@@ -13,10 +13,9 @@ type InputInitConsumer struct {
 	ConsumerGroup sarama.ConsumerGroup
 	Topic         string
 	Processor     sarama.ConsumerGroupHandler
-	ErrorChan     chan error
 }
 
-func InitConsumer(ctx context.Context, in *InputInitConsumer) {
+func InitConsumer(ctx context.Context, isErrConsume chan error, in *InputInitConsumer) {
 	go func() {
 		sessionCtx, sessionCtxCancel := context.WithCancel(ctx)
 
@@ -31,7 +30,7 @@ func InitConsumer(ctx context.Context, in *InputInitConsumer) {
 
 			if err != nil {
 				log.Printf("Error from consumer: %v\n", err)
-				in.ErrorChan <- err
+				isErrConsume <- err
 				return
 			}
 
@@ -39,7 +38,7 @@ func InitConsumer(ctx context.Context, in *InputInitConsumer) {
 			case <-time.After(5 * time.Second):
 				log.Println("CloudEventSink group returned, Rebalancing.")
 			case <-ctx.Done():
-				in.ErrorChan <- fmt.Errorf("CloudEventSink group cancelled. Stopping")
+				isErrConsume <- fmt.Errorf("CloudEventSink group cancelled. Stopping")
 				log.Println("CloudEventSink group cancelled. Stopping")
 				return
 			}

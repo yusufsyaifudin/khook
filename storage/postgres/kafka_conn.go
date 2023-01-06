@@ -12,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/sony/sonyflake"
+	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"github.com/yusufsyaifudin/khook/storage"
 	"io"
 	"sync"
@@ -115,6 +116,12 @@ func NewKafkaConnStore(opts ...Option) (*KafkaConnStore, error) {
 }
 
 func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.InputPersistKafkaConfig) (out storage.OutPersistKafkaConfig, err error) {
+	err = validator.Validate(in)
+	if err != nil {
+		err = fmt.Errorf("postgres: input validation error: %w", err)
+		return
+	}
+
 	kafkaCfg, err := json.Marshal(in.KafkaConfig)
 	if err != nil {
 		err = fmt.Errorf("cannot marshal Kafka Config to json: %w", err)
@@ -153,7 +160,7 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 	return
 }
 
-func (k *KafkaConnStore) GetAllKafkaConfig(ctx context.Context) (rows storage.KafkaConfigRows, err error) {
+func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.KafkaConfigRows, err error) {
 	lastRow := struct {
 		LastID int64 `db:"id"`
 	}{}
@@ -180,6 +187,12 @@ func (k *KafkaConnStore) GetAllKafkaConfig(ctx context.Context) (rows storage.Ka
 }
 
 func (k *KafkaConnStore) DeleteKafkaConfig(ctx context.Context, in storage.InputDeleteKafkaConfig) (out storage.OutDeleteKafkaConfig, err error) {
+	err = validator.Validate(in)
+	if err != nil {
+		err = fmt.Errorf("postgres: input validation error: %w", err)
+		return
+	}
+
 	_, err = k.db.ExecContext(ctx, SqlSoftDelete, in.Label, time.Now().UnixMicro())
 	if err != nil {
 		err = fmt.Errorf("cannot delete from postgre: %w", err)

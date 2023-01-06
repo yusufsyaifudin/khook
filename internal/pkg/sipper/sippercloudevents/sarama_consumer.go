@@ -1,4 +1,4 @@
-package sipper
+package sippercloudevents
 
 import (
 	"context"
@@ -20,19 +20,17 @@ import (
 
 // CloudEventSink represents a Sarama consumer group consumer
 type CloudEventSink struct {
-	webhookCfg             storage.Webhook
-	isConnUpOrErr          chan error
-	underlyingConn         sarama.Client
+	webhookCfg             storage.SinkTarget
+	chanReadyOrErr         chan error
 	cloudEventHTTPProtocol protocol.Sender
 }
 
 var _ sarama.ConsumerGroupHandler = (*CloudEventSink)(nil)
 
-func NewCloudEventSink(webhookCfg storage.Webhook, connectionErr chan error, underlyingConn sarama.Client) *CloudEventSink {
+func NewCloudEventSink(webhookCfg storage.SinkTarget, chanReadyOrErr chan error) *CloudEventSink {
 	return &CloudEventSink{
 		webhookCfg:     webhookCfg,
-		isConnUpOrErr:  connectionErr,
-		underlyingConn: underlyingConn,
+		chanReadyOrErr: chanReadyOrErr,
 	}
 }
 
@@ -58,7 +56,7 @@ func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
 
 	// Mark the c as ready
 	c.cloudEventHTTPProtocol = cloudEventHTTPProtocol
-	c.isConnUpOrErr <- nil
+	c.chanReadyOrErr <- nil
 	return nil
 }
 
@@ -95,7 +93,7 @@ func (c *CloudEventSink) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				kafkaMessage, ok := binding.UnwrapMessage(cloudEventMsg).(*kafka_sarama.Message)
 				if !ok {
 					// This should be rare case, or never be triggered if the message is really from Kafka.
-					// Since CloudEvent SDK uses Sarama, and this program uses Sarama, the type must equal.
+					// Since CloudEvents SDK uses Sarama, and this program uses Sarama, the type must equal.
 					// But, when it's not, continue with error log.
 					err := fmt.Errorf("error while casting the data into type *kafka_sarama.Message")
 					if _err := ceSaramaMsg.Finish(err); _err != nil {
@@ -111,7 +109,7 @@ func (c *CloudEventSink) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				cloudEvent := cloudevents.NewEvent()
 				cloudEvent.SetID(uuid.New().String())
 				cloudEvent.SetTime(time.Now())
-				cloudEvent.SetType(c.webhookCfg.WebhookSink.CEType)
+				cloudEvent.SetType(c.webhookCfg.CloudEvents.Type)
 				cloudEvent.SetSource(fmt.Sprintf("%s:%d:%d", oriMsg.Topic, oriMsg.Partition, oriMsg.Offset)) // source containing Kafka topic
 
 				// setting the content type if it blanks
@@ -141,7 +139,7 @@ func (c *CloudEventSink) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			}
 
 			// setting the URL and exponential Retry Backoff using context.
-			ctx := cloudevents.ContextWithTarget(context.Background(), c.webhookCfg.WebhookSink.URL)
+			ctx := cloudevents.ContextWithTarget(context.Background(), c.webhookCfg.CloudEvents.URL)
 			ctx = cloudevents.ContextWithRetriesExponentialBackoff(ctx, 10*time.Second, 3)
 
 			errSend := c.cloudEventHTTPProtocol.Send(ctx, cloudEventMsg)

@@ -7,49 +7,14 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/hashicorp/go-multierror"
 	"github.com/yusufsyaifudin/khook/storage"
-	"github.com/yusufsyaifudin/khook/storage/inmem"
 	"golang.org/x/sync/semaphore"
 	"log"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
-
-type kafkaOpt struct {
-	kafkaConnStore  storage.KafkaConnStore
-	updateConnEvery time.Duration
-}
-
-func kafkaOptDefault() *kafkaOpt {
-	return &kafkaOpt{
-		kafkaConnStore:  inmem.NewKafkaConnStore(),
-		updateConnEvery: 10 * time.Second,
-	}
-}
-
-type KafkaOpt func(opt *kafkaOpt) error
-
-func WithConnStore(store storage.KafkaConnStore) KafkaOpt {
-	return func(opt *kafkaOpt) error {
-		if store == nil {
-			return fmt.Errorf("nil KafkaConnStore")
-		}
-
-		opt.kafkaConnStore = store
-		return nil
-	}
-}
-func WithUpdateConnInterval(interval time.Duration) KafkaOpt {
-	return func(opt *kafkaOpt) error {
-		if interval.Seconds() <= 0 {
-			return nil
-		}
-
-		opt.updateConnEvery = interval
-		return nil
-	}
-}
 
 type kafkaConnState struct {
 	// ConfigCheckSum only save the SHA256 checksum string
@@ -57,6 +22,11 @@ type kafkaConnState struct {
 	// to minimize the big memory inside map.
 	ConfigCheckSum string
 	Client         sarama.Client
+}
+
+type kafkaOpt struct {
+	kafkaConnStore  storage.KafkaConnStore
+	updateConnEvery time.Duration
 }
 
 // KafkaClientManager is a manager to create and handle the Kafka connection.
@@ -70,8 +40,10 @@ type KafkaClientManager struct {
 	kafkaConnMap map[string]*kafkaConnState
 }
 
+var _ Manager = (*KafkaClientManager)(nil)
+
 func NewKafkaClientManager(opts ...KafkaOpt) (*KafkaClientManager, error) {
-	defaultOpt := kafkaOptDefault()
+	defaultOpt := defaultKafkaOpt()
 	for _, opt := range opts {
 		err := opt(defaultOpt)
 		if err != nil {
@@ -206,7 +178,7 @@ func (k *KafkaClientManager) manageConnection() {
 // Then, in another code, we can use Redis as distributed state management to
 // distribute number of consumers depending on Kafka partition.
 func (k *KafkaClientManager) updateConnections() {
-	outKafkaCfg, err := k.kafkaOpt.kafkaConnStore.GetAllKafkaConfig(context.Background())
+	outKafkaCfg, err := k.kafkaOpt.kafkaConnStore.GetKafkaConfigs(context.Background())
 	if err != nil {
 		log.Printf("cannot list kafka config during rebalance, your connection may be outdated: %s\n", err)
 		return
@@ -288,13 +260,6 @@ func (k *KafkaClientManager) updateConnections() {
 
 }
 
-type ConnInfo struct {
-	Label   string   `json:"label,omitempty"`
-	Brokers []string `json:"brokers,omitempty"`
-	Topics  []string `json:"topics,omitempty"`
-	Error   string   `json:"error,omitempty"`
-}
-
 func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
 	k.kafkaConnLock.RLock()
 	defer k.kafkaConnLock.RUnlock()
@@ -359,6 +324,14 @@ func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
 	syncMap.Range(func(key, value any) bool {
 		conn = append(conn, value.(ConnInfo))
 		return true
+	})
+
+	sort.Slice(conn, func(i, j int) bool {
+		if conn[i].Label < conn[j].Label {
+			return true
+		}
+
+		return false
 	})
 
 	return

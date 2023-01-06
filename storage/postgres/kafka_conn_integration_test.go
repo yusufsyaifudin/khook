@@ -29,7 +29,7 @@ func TestItgKafkaConfigRows(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rows, err := conn.GetAllKafkaConfig(ctx)
+	rows, err := conn.GetKafkaConfigs(ctx)
 	assert.NoError(t, err)
 
 	for rows.Next() {

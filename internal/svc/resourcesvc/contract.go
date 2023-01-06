@@ -1,4 +1,4 @@
-package resourcemgr
+package resourcesvc
 
 import (
 	"context"
@@ -6,12 +6,12 @@ import (
 	"github.com/yusufsyaifudin/khook/storage"
 )
 
-type Consumer interface {
+type ResourceService interface {
 	AddKafkaConfig(ctx context.Context, in InAddKafkaConfig) (out OutAddKafkaConfig, err error)
 	GetActiveKafkaConfigs(ctx context.Context) (out OutGetActiveKafkaConfigs)
 	AddWebhook(ctx context.Context, in InputAddWebhook) (out OutAddWebhook, err error)
 	GetWebhooks(ctx context.Context) (out OutGetWebhooks, err error)
-	GetActiveWebhooks(ctx context.Context) (out OutGetActiveWebhooks, err error)
+	GetActiveConsumers(ctx context.Context) (out OutGetActiveConsumers, err error)
 	PauseWebhook(ctx context.Context, in InPauseWebhook) (out OutPauseWebhook, err error)
 	ResumeWebhook(ctx context.Context, in InResumeWebhook) (out OutResumeWebhook, err error)
 	GetPausedWebhooks(ctx context.Context) (out OutGetPausedWebhooks, err error)
@@ -33,19 +33,19 @@ type OutGetActiveKafkaConfigs struct {
 }
 
 type InputAddWebhook struct {
-	Webhook storage.Webhook `json:"webhook"`
+	Webhook storage.SinkTarget `json:"webhook"`
 }
 
 type OutAddWebhook struct {
-	Webhook storage.Webhook `json:"webhook"`
+	Webhook storage.SinkTarget `json:"webhook"`
 }
 
 type OutGetWebhooks struct {
-	Webhooks []storage.Webhook `json:"webhooks"`
+	Webhooks []storage.SinkTarget `json:"webhooks"`
 }
 
-type OutGetActiveWebhooks struct {
-	ActiveWebhooks []storage.Webhook `json:"active_webhooks"`
+type OutGetActiveConsumers struct {
+	ActiveConsumers []storage.SinkTarget `json:"active_webhooks"`
 }
 
 type InPauseWebhook struct {
@@ -65,5 +65,5 @@ type OutResumeWebhook struct {
 }
 
 type OutGetPausedWebhooks struct {
-	PausedWebhooks []storage.Webhook `json:"paused_webhooks"`
+	PausedWebhooks []storage.SinkTarget `json:"paused_webhooks"`
 }

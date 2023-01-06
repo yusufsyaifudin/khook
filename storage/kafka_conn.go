@@ -8,16 +8,16 @@ import (
 
 type KafkaConnStore interface {
 	PersistKafkaConfig(ctx context.Context, in InputPersistKafkaConfig) (out OutPersistKafkaConfig, err error)
-	GetAllKafkaConfig(ctx context.Context) (rows KafkaConfigRows, err error)
+	GetKafkaConfigs(ctx context.Context) (rows KafkaConfigRows, err error)
 	DeleteKafkaConfig(ctx context.Context, in InputDeleteKafkaConfig) (out OutDeleteKafkaConfig, err error)
 }
 
 type KafkaConfig struct {
-	Label   string   `json:"label"`
-	Brokers []string `json:"brokers,omitempty"`
+	Label   string   `json:"label" validate:"required"`
+	Brokers []string `json:"brokers,omitempty" validate:"required"`
 }
 
-// Scan will read the data bytes from database and parse it as ServiceAccountKey
+// Scan will read the data bytes from database and parse it as KafkaConfig
 func (m *KafkaConfig) Scan(src interface{}) error {
 	if m == nil {
 		return fmt.Errorf("error scan service account on nil struct")
@@ -50,8 +50,8 @@ type InputPersistKafkaConfig struct {
 }
 
 type OutPersistKafkaConfig struct {
-	KafkaConfig KafkaConfig
 	CheckSum    string
+	KafkaConfig KafkaConfig
 }
 
 type InputDeleteKafkaConfig struct {

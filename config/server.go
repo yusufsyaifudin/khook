@@ -17,6 +17,7 @@ type ServerConfig struct {
 
 	Storage struct {
 		KafkaConnStore struct {
+			InMemory *struct{} `yaml:"in_memory"`
 			Postgres *Postgres `yaml:"postgres"`
 		} `yaml:"kafka_conn_store"`
 	} `yaml:"storage"`
