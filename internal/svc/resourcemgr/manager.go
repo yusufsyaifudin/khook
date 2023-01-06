@@ -89,11 +89,6 @@ func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfi
 		return
 	}
 
-	err = c.Config.KafkaClientManager.AddConnection(ctx, outPersist.KafkaConfig, outPersist.CheckSum)
-	if err != nil {
-		return
-	}
-
 	out = OutAddKafkaConfig{
 		KafkaConfig: outPersist.KafkaConfig,
 	}

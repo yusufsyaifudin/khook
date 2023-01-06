@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/yusufsyaifudin/khook/storage"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
+	"golang.org/x/sync/semaphore"
 	"log"
 	"math/rand"
 	"strings"
@@ -16,16 +17,14 @@ import (
 )
 
 type kafkaOpt struct {
-	kafkaConnStore   storage.KafkaConnStore
-	refreshConnEvery time.Duration
-	updateConnEvery  time.Duration
+	kafkaConnStore  storage.KafkaConnStore
+	updateConnEvery time.Duration
 }
 
 func kafkaOptDefault() *kafkaOpt {
 	return &kafkaOpt{
-		kafkaConnStore:   inmem.NewKafkaConnStore(),
-		refreshConnEvery: 10 * time.Second,
-		updateConnEvery:  10 * time.Second,
+		kafkaConnStore:  inmem.NewKafkaConnStore(),
+		updateConnEvery: 10 * time.Second,
 	}
 }
 
@@ -60,20 +59,12 @@ type kafkaConnState struct {
 	Client         sarama.Client
 }
 
-type mutateConnState struct {
-	Action         string
-	Label          string
-	ConfigChecksum string
-	Config         storage.KafkaConfig
-}
-
 // KafkaClientManager is a manager to create and handle the Kafka connection.
 type KafkaClientManager struct {
-	kafkaOpt          *kafkaOpt
-	tickerRefreshConn *time.Ticker
-	tickerUpdateConn  *time.Ticker
-	mutateConnStates  chan mutateConnState
-	kafkaConnLock     sync.RWMutex
+	kafkaOpt         *kafkaOpt
+	tickerUpdateConn *time.Ticker
+	sem              *semaphore.Weighted
+	kafkaConnLock    sync.RWMutex
 
 	// kafkaConnMap kafka label as key
 	kafkaConnMap map[string]*kafkaConnState
@@ -89,62 +80,20 @@ func NewKafkaClientManager(opts ...KafkaOpt) (*KafkaClientManager, error) {
 	}
 
 	svc := &KafkaClientManager{
-		kafkaOpt:          defaultOpt,
-		tickerRefreshConn: time.NewTicker(defaultOpt.refreshConnEvery + (time.Duration(rand.Int63n(100)) * time.Millisecond)),
-		tickerUpdateConn:  time.NewTicker(defaultOpt.updateConnEvery + (time.Duration(rand.Int63n(150)) * time.Millisecond)),
-		mutateConnStates:  make(chan mutateConnState, 10),
-		kafkaConnLock:     sync.RWMutex{},
-		kafkaConnMap:      make(map[string]*kafkaConnState),
+		kafkaOpt:         defaultOpt,
+		tickerUpdateConn: time.NewTicker(defaultOpt.updateConnEvery + (time.Duration(rand.Int63n(150)) * time.Millisecond)),
+		sem:              semaphore.NewWeighted(10),
+		kafkaConnLock:    sync.RWMutex{},
+		kafkaConnMap:     make(map[string]*kafkaConnState),
 	}
 
 	go svc.manageConnection()
 	return svc, nil
 }
 
-func (k *KafkaClientManager) AddConnection(ctx context.Context, cfg storage.KafkaConfig, checksum string) error {
-	// TODO validate config, if error then return immediately
-	k.mutateConnStates <- mutateConnState{
-		Action:         "add",
-		Label:          cfg.Label,
-		ConfigChecksum: checksum,
-		Config:         cfg,
-	}
-	return nil
-}
-
-func (k *KafkaClientManager) DeleteConnection(ctx context.Context, kafkaCfgLabel string) error {
-	// TODO validate config, if error then return immediately
-	k.mutateConnStates <- mutateConnState{
-		Action: "delete",
-		Label:  kafkaCfgLabel,
-	}
-	return nil
-}
-
-func (k *KafkaClientManager) deleteConnection(kafkaCfgLabel string) {
-	k.kafkaConnLock.Lock()
-	defer k.kafkaConnLock.Unlock()
-	connState, exist := k.kafkaConnMap[kafkaCfgLabel]
-	if !exist {
-		return
-	}
-
-	if connState.Client == nil {
-		return
-	}
-
-	delete(k.kafkaConnMap, kafkaCfgLabel)
-	err := connState.Client.Close()
-	if err != nil {
-		log.Printf("error when delete and close connection '%s'\n", kafkaCfgLabel)
-	}
-
-	return
-}
-
+// addOrRefreshConnection Add new connection, but before that, make sure the connection is not duplicate.
 func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig, checksum string) {
-	// Add new connection, but before that, make sure the connection is not duplicate.
-	k.kafkaConnLock.Lock()
+	k.kafkaConnLock.RLock() // lock read
 
 	isRemoveThisConn := false
 	kafkaState, connExist := k.kafkaConnMap[kafkaCfg.Label]
@@ -184,6 +133,8 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 
 	}
 
+	k.kafkaConnLock.RUnlock()
+
 	// We will update the current connection if one of these condition return True:
 	// * isRemoveThisConn = true               -> means that one of brokers is down
 	// * connExist = false                     -> means that connection is not exist in the current opened connection
@@ -203,6 +154,7 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 	}
 
 	if len(updateConnReasons) > 0 {
+		k.kafkaConnLock.Lock() // unlock before return
 		saramaCfg := sarama.NewConfig()
 		kafkaConn, err := sarama.NewClient(kafkaCfg.Brokers, saramaCfg)
 		if err != nil {
@@ -231,21 +183,11 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 	}
 
 	log.Printf("good connection on label '%s'\n", kafkaCfg.Label)
-	k.kafkaConnLock.Unlock()
 }
 
 func (k *KafkaClientManager) manageConnection() {
 	for {
 		select {
-
-		case mutateConn := <-k.mutateConnStates:
-			switch mutateConn.Action {
-			case "add":
-				k.addOrRefreshConnection(mutateConn.Config, mutateConn.ConfigChecksum)
-			case "delete":
-				k.deleteConnection(mutateConn.Label)
-			}
-
 		case t := <-k.tickerUpdateConn.C:
 			// ping connection periodically..
 			log.Printf("update connection at %s\n", t.Format(time.RFC3339Nano))
@@ -277,6 +219,9 @@ func (k *KafkaClientManager) updateConnections() {
 	}
 	k.kafkaConnLock.RUnlock()
 
+	ctx := context.Background()
+	wg := &sync.WaitGroup{}
+
 	for outKafkaCfg.Next() {
 		kafkaCfg, kafkaCfgChecksum, _err := outKafkaCfg.KafkaConfig()
 		if _err != nil {
@@ -287,14 +232,31 @@ func (k *KafkaClientManager) updateConnections() {
 		kafkaLabel := kafkaCfg.Label
 		log.Printf("check conn id %s exist or not with read lock\n", kafkaLabel)
 
+		err := k.sem.Acquire(ctx, 1)
+		if err != nil {
+			log.Printf("cannot acquire lock: %s\n", err)
+			continue
+		}
+
 		// delete from unvisited.
 		// if after for loop done it still not empty, it means that the connection is not exist anymore.
 		// we can then close and delete the connection
 		delete(unvisitedConn, kafkaLabel)
 
-		// add or refresh connection if not exist
-		k.addOrRefreshConnection(kafkaCfg, kafkaCfgChecksum)
+		// add or refresh connection if not exist using go routine
+		// so, we can have multiple try to open connection
+		wg.Add(1)
+		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConfig, _checksum string) {
+			defer func() {
+				_wg.Done()
+				k.sem.Release(1)
+			}()
+
+			k.addOrRefreshConnection(_kafkaCfg, _checksum)
+		}(wg, kafkaCfg, kafkaCfgChecksum)
 	}
+
+	wg.Wait()
 
 	// delete unvisited connection from the connection list.
 	for kafkaLabel := range unvisitedConn {
