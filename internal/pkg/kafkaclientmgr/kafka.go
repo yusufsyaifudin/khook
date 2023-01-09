@@ -1,13 +1,18 @@
 package kafkaclientmgr
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/hashicorp/go-multierror"
 	"github.com/yusufsyaifudin/khook/storage"
 	"golang.org/x/sync/semaphore"
+	"io"
 	"log"
 	"math/rand"
 	"sort"
@@ -17,11 +22,9 @@ import (
 )
 
 type kafkaConnState struct {
-	// ConfigCheckSum only save the SHA256 checksum string
-	// This to ensure that we don't save actual configuration in memory (map)
-	// to minimize the big memory inside map.
-	ConfigCheckSum string
-	Client         sarama.Client
+	// Save checksum of the client as SHA256 to minimize memory footprint
+	Checksum string
+	Client   sarama.Client
 }
 
 type kafkaOpt struct {
@@ -63,23 +66,39 @@ func NewKafkaClientManager(opts ...KafkaOpt) (*KafkaClientManager, error) {
 	return svc, nil
 }
 
+func (k *KafkaClientManager) getConnID(kafkaCfg storage.KafkaConnection) string {
+	return k.getConnIDScoped(kafkaCfg.Namespace, kafkaCfg.Name)
+}
+
+func (k *KafkaClientManager) getConnIDScoped(ns, name string) string {
+	return fmt.Sprintf("%s:%s", ns, name)
+}
+
 // addOrRefreshConnection Add new connection, but before that, make sure the connection is not duplicate.
-func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig, checksum string) {
+func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnection, resourceState storage.ResourceState) {
+	connID := k.getConnID(kafkaCfg)
+
 	k.kafkaConnLock.RLock() // lock read
 
 	isRemoveThisConn := false
-	kafkaState, connExist := k.kafkaConnMap[kafkaCfg.Label]
+	currConn, connExist := k.kafkaConnMap[connID]
 	log.Printf(
 		"conn status label '%s' %t state not nil='%t'\n",
-		kafkaCfg.Label, connExist, kafkaState != nil,
+		kafkaCfg.Name, connExist, currConn != nil,
 	)
 
-	if connExist && kafkaState.ConfigCheckSum == checksum && kafkaState != nil && kafkaState.Client != nil {
+	checksum, err := specChecksum(kafkaCfg.Spec)
+	if err != nil {
+		log.Printf("cannot calculate checksum for spec kafka: %s\n", err)
+		return
+	}
+
+	if connExist && k.kafkaConnMap[connID].Checksum == checksum && currConn != nil && currConn.Client != nil {
 
 		// if connection is existed AND checksum is still same:
 		// try to check each connection to brokers
-		saramaClientCfg := kafkaState.Client.Config()
-		for idxBroker, broker := range kafkaState.Client.Brokers() { // brokers loop
+		saramaClientCfg := currConn.Client.Config()
+		for idxBroker, broker := range currConn.Client.Brokers() { // brokers loop
 			if isRemoveThisConn {
 				continue // skip all next brokers, if one broker is already unavailable
 			}
@@ -90,14 +109,14 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 
 			_err := broker.Open(saramaClientCfg)
 			if errors.Is(_err, sarama.ErrAlreadyConnected) {
-				log.Printf("connection '%s' broker %d '%s' is still up\n", kafkaCfg.Label, idxBroker, broker.Addr())
+				log.Printf("connection '%s' broker %d '%s' is still up\n", kafkaCfg.Name, idxBroker, broker.Addr())
 
 				_err = nil // discard error, so it will continue to next iteration
 			}
 
 			if _err != nil {
 				// if one broker is failed, then remove it from connection list, so it can be re-connected again
-				log.Printf("connection '%s' broker %d '%s' is error: %s\n", kafkaCfg.Label, idxBroker, broker.Addr(), _err)
+				log.Printf("connection '%s' broker %d '%s' is error: %s\n", kafkaCfg.Name, idxBroker, broker.Addr(), _err)
 				isRemoveThisConn = true
 				continue // continue brokers loop
 			}
@@ -110,7 +129,7 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 	// We will update the current connection if one of these condition return True:
 	// * isRemoveThisConn = true               -> means that one of brokers is down
 	// * connExist = false                     -> means that connection is not exist in the current opened connection
-	// * kafkaState.ConfigCheckSum != checksum -> configuration is different
+	// * currConn.ConfigCheckSum != checksum -> configuration is different
 	// Otherwise, return it because all existing broker connection is still good.
 	updateConnReasons := make([]string, 0)
 	if isRemoveThisConn {
@@ -121,32 +140,32 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 		updateConnReasons = append(updateConnReasons, "connection is not exist in the list")
 	}
 
-	if kafkaState != nil && kafkaState.ConfigCheckSum != checksum {
-		updateConnReasons = append(updateConnReasons, fmt.Sprintf("checksum changed '%s' to '%s'", kafkaState.ConfigCheckSum, checksum))
+	if currConn != nil && currConn.Checksum != checksum {
+		updateConnReasons = append(updateConnReasons, fmt.Sprintf("checksum changed '%s' to '%s'", currConn.Checksum, checksum))
 	}
 
 	if len(updateConnReasons) > 0 {
 		k.kafkaConnLock.Lock() // unlock before return
 		saramaCfg := sarama.NewConfig()
-		kafkaConn, err := sarama.NewClient(kafkaCfg.Brokers, saramaCfg)
+		kafkaConn, err := sarama.NewClient(kafkaCfg.Spec.Brokers, saramaCfg)
 		if err != nil {
 
 			// TODO: need to inform all consumer that using this connection that this connection been deleted
-			delete(k.kafkaConnMap, kafkaCfg.Label)
+			delete(k.kafkaConnMap, connID)
 
-			log.Printf("conn id %s is error to create: %s\n", kafkaCfg.Label, err)
+			log.Printf("conn id %s is error to create: %s\n", kafkaCfg.Name, err)
 			k.kafkaConnLock.Unlock() // unlock before return
 			return
 		}
 
-		k.kafkaConnMap[kafkaCfg.Label] = &kafkaConnState{
-			ConfigCheckSum: checksum,
-			Client:         kafkaConn,
+		k.kafkaConnMap[connID] = &kafkaConnState{
+			Checksum: checksum,
+			Client:   kafkaConn,
 		}
 
 		log.Printf(
 			"new kafka connection '%s' added to the list because: %s\n",
-			kafkaCfg.Label,
+			kafkaCfg.Name,
 			strings.Join(updateConnReasons, ", "),
 		)
 
@@ -154,7 +173,7 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConfig
 		return
 	}
 
-	log.Printf("good connection on label '%s'\n", kafkaCfg.Label)
+	log.Printf("good connection on label '%s'\n", kafkaCfg.Name)
 }
 
 func (k *KafkaClientManager) manageConnection() {
@@ -186,8 +205,8 @@ func (k *KafkaClientManager) updateConnections() {
 
 	k.kafkaConnLock.RLock()
 	unvisitedConn := make(map[string]struct{})
-	for kafkaLabel := range k.kafkaConnMap {
-		unvisitedConn[kafkaLabel] = struct{}{}
+	for connID := range k.kafkaConnMap {
+		unvisitedConn[connID] = struct{}{}
 	}
 	k.kafkaConnLock.RUnlock()
 
@@ -195,13 +214,13 @@ func (k *KafkaClientManager) updateConnections() {
 	wg := &sync.WaitGroup{}
 
 	for outKafkaCfg.Next() {
-		kafkaCfg, kafkaCfgChecksum, _err := outKafkaCfg.KafkaConfig()
+		kafkaCfg, state, _err := outKafkaCfg.KafkaConnection()
 		if _err != nil {
 			log.Printf("getting kafka config row error: %s\n", _err)
 			continue
 		}
 
-		kafkaLabel := kafkaCfg.Label
+		kafkaLabel := kafkaCfg.Name
 		log.Printf("check conn id %s exist or not with read lock\n", kafkaLabel)
 
 		err := k.sem.Acquire(ctx, 1)
@@ -213,28 +232,29 @@ func (k *KafkaClientManager) updateConnections() {
 		// delete from unvisited.
 		// if after for loop done it still not empty, it means that the connection is not exist anymore.
 		// we can then close and delete the connection
-		delete(unvisitedConn, kafkaLabel)
+		connID := k.getConnID(kafkaCfg)
+		delete(unvisitedConn, connID)
 
 		// add or refresh connection if not exist using go routine
 		// so, we can have multiple try to open connection
 		wg.Add(1)
-		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConfig, _checksum string) {
+		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnection, _state storage.ResourceState) {
 			defer func() {
 				_wg.Done()
 				k.sem.Release(1)
 			}()
 
-			k.addOrRefreshConnection(_kafkaCfg, _checksum)
-		}(wg, kafkaCfg, kafkaCfgChecksum)
+			k.addOrRefreshConnection(_kafkaCfg, _state)
+		}(wg, kafkaCfg, state)
 	}
 
 	wg.Wait()
 
 	// delete unvisited connection from the connection list.
-	for kafkaLabel := range unvisitedConn {
+	for connID := range unvisitedConn {
 		log.Printf("deleting kafka connection '%s' from list because not exist in storage\n", unvisitedConn)
 		k.kafkaConnLock.Lock()
-		connState, exist := k.kafkaConnMap[kafkaLabel]
+		connState, exist := k.kafkaConnMap[connID]
 		if !exist {
 			k.kafkaConnLock.Unlock()
 			continue
@@ -249,12 +269,12 @@ func (k *KafkaClientManager) updateConnections() {
 
 		_err := connState.Client.Close()
 		if _err != nil {
-			log.Printf("cannot close client '%s' on unvisited connection: %s\n", kafkaLabel, _err)
+			log.Printf("cannot close client '%s' on unvisited connection: %s\n", connID, _err)
 			k.kafkaConnLock.Unlock()
 			continue
 		}
 
-		delete(k.kafkaConnMap, kafkaLabel)
+		delete(k.kafkaConnMap, connID)
 		k.kafkaConnLock.Unlock()
 	}
 
@@ -266,15 +286,15 @@ func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
 
 	syncMap := &sync.Map{}
 	wg := &sync.WaitGroup{}
-	for kafkaLabel, kafkaState := range k.kafkaConnMap {
+	for connID, kafkaState := range k.kafkaConnMap {
 		wg.Add(1)
 
 		// TODO: we need cancellation in Go routine
-		go func(_wg *sync.WaitGroup, _map *sync.Map, _kafkaLabel string, _kafkaState *kafkaConnState) {
+		go func(_wg *sync.WaitGroup, _map *sync.Map, _connID string, _kafkaState *kafkaConnState) {
 			defer wg.Done()
 
 			connInfo := ConnInfo{
-				Label:   _kafkaLabel,
+				Label:   _connID,
 				Brokers: make([]string, 0),
 				Topics:  nil,
 			}
@@ -315,7 +335,7 @@ func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
 			_map.Store(connInfo.Label, connInfo)
 			return
 
-		}(wg, syncMap, kafkaLabel, kafkaState)
+		}(wg, syncMap, connID, kafkaState)
 	}
 
 	wg.Wait()
@@ -337,26 +357,28 @@ func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
 	return
 }
 
-func (k *KafkaClientManager) GetConn(ctx context.Context, label string) (sarama.Client, error) {
+func (k *KafkaClientManager) GetConn(ctx context.Context, ns, name string) (sarama.Client, error) {
+
+	connID := k.getConnIDScoped(ns, name)
 	k.kafkaConnLock.RLock()
-	client, exist := k.kafkaConnMap[label]
+	client, exist := k.kafkaConnMap[connID]
 	if !exist {
 		k.kafkaConnLock.RUnlock()
 
 		// also ensure key is not exist in config map
 		k.kafkaConnLock.Lock()
-		delete(k.kafkaConnMap, label)
+		delete(k.kafkaConnMap, connID)
 		k.kafkaConnLock.Unlock()
-		return nil, fmt.Errorf("cannot get kafka connection for label '%s'", label)
+		return nil, fmt.Errorf("cannot get kafka connection for name '%s'", name)
 	}
 
 	k.kafkaConnLock.RUnlock()
 
 	if client == nil {
 		k.kafkaConnLock.Lock()
-		delete(k.kafkaConnMap, label)
+		delete(k.kafkaConnMap, connID)
 		k.kafkaConnLock.Unlock()
-		return nil, fmt.Errorf("nil kafka client for label '%s'", label)
+		return nil, fmt.Errorf("nil kafka client for name '%s'", name)
 	}
 
 	_, err := client.Client.Topics()
@@ -384,4 +406,20 @@ func (k *KafkaClientManager) Close() error {
 	}
 
 	return errCum
+}
+
+func specChecksum(kafkaConn storage.KafkaConfigSpec) (string, error) {
+	specBytes, err := json.Marshal(kafkaConn)
+	if err != nil {
+		return "", err
+	}
+
+	h := sha256.New()
+	_, err = io.Copy(h, bytes.NewReader(specBytes))
+	if err != nil {
+		err = fmt.Errorf("cannot copy to calculate kafka config checksum: %w", err)
+		return "", err
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

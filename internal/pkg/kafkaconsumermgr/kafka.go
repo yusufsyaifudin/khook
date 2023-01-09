@@ -74,15 +74,15 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 			}
 
 			for kafkaConsumers.Next() {
-				sinkTarget, _, _err := kafkaConsumers.SinkTarget()
+				consumerCfg, _err := kafkaConsumers.ConsumerConfigRow()
 				if _err != nil {
 					log.Printf("getting sink target row error: %s\n", _err)
 					continue
 				}
 
-				sourceKafkaConnLabel := sinkTarget.KafkaConfigLabel
-				targetSinkLabel := sinkTarget.Label
-				topicSource := sinkTarget.KafkaTopic
+				sourceKafkaConnLabel := consumerCfg.Label
+				targetSinkLabel := consumerCfg.Label
+				topicSource := consumerCfg.SinkTarget.KafkaTopic
 
 				k.mKafkaConsGroup.RLock()
 				_, consumerGroupExist := k.kafkaConsGroup[targetSinkLabel]
@@ -103,7 +103,7 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 				k.mKafkaConsGroup.RUnlock()
 
 				log.Printf("add %s to consume kafka topic %s\n", targetSinkLabel, topicSource)
-				kafkaClient, err := k.kafkaOpt.kafkaClientManager.GetConn(context.Background(), sourceKafkaConnLabel)
+				kafkaClient, err := k.kafkaOpt.kafkaClientManager.GetConn(context.Background(), "default", sourceKafkaConnLabel)
 				if err != nil {
 					log.Printf(
 						"error kafka connection '%s' for consumer '%s' to consumer topic '%s': %s\n",
@@ -132,7 +132,7 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 				// isConnUpOrErr will wait either nil error (come from Setup consumer handler)
 				// or error from sarama.ConsumerGroupHandler.Consume inside function InitConsumer
 				isConnUpOrErr := make(chan error, 1)
-				processor, procErr := sipper.SelectProcessor(sinkTarget, isConnUpOrErr)
+				processor, procErr := sipper.SelectProcessor(targetSinkLabel, consumerCfg.SinkTarget, isConnUpOrErr)
 				if procErr != nil {
 					log.Printf("cannot select processor: %s\n", procErr)
 					continue

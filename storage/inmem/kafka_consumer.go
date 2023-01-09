@@ -1,11 +1,7 @@
 package inmem
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"io"
@@ -34,34 +30,20 @@ func (w *KafkaConsumerStore) PersistKafkaConsumer(ctx context.Context, in storag
 		return
 	}
 
-	actual, _ := w.store.LoadOrStore(in.SinkTarget.Label, in.SinkTarget)
-	b, err := json.Marshal(actual)
-	if err != nil {
-		return
-	}
-
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(b))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate sink target checksum: %w", err)
-		return
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
+	actual, _ := w.store.LoadOrStore(in.ConsumerConfigRow.Label, in.ConsumerConfigRow)
 
 	out = storage.OutPersistKafkaConsumer{
-		Checksum:   checkSum,
-		SinkTarget: actual.(storage.SinkTarget),
+		ConsumerConfigRow: actual.(storage.ConsumerConfigRow),
 	}
 
 	return
 }
 
 func (w *KafkaConsumerStore) GetKafkaConsumers(ctx context.Context) (out storage.KafkaConsumerRows, err error) {
-	webhooks := make([]storage.SinkTarget, 0)
+	webhooks := make([]storage.ConsumerConfigRow, 0)
 
 	w.store.Range(func(key, value any) bool {
-		webhooks = append(webhooks, value.(storage.SinkTarget))
+		webhooks = append(webhooks, value.(storage.ConsumerConfigRow))
 		return true
 	})
 
@@ -82,8 +64,8 @@ func (w *KafkaConsumerStore) GetSinkTargetByLabel(ctx context.Context, label str
 
 type WebhookRows struct {
 	lock    sync.Mutex
-	rows    []storage.SinkTarget
-	currRow *storage.SinkTarget
+	rows    []storage.ConsumerConfigRow
+	currRow *storage.ConsumerConfigRow
 }
 
 var _ storage.KafkaConsumerRows = (*WebhookRows)(nil)
@@ -100,25 +82,12 @@ func (w *WebhookRows) Next() bool {
 	return false
 }
 
-func (w *WebhookRows) SinkTarget() (storage.SinkTarget, string, error) {
+func (w *WebhookRows) ConsumerConfigRow() (storage.ConsumerConfigRow, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currRow == nil {
-		return storage.SinkTarget{}, "", io.ErrUnexpectedEOF
+		return storage.ConsumerConfigRow{}, io.ErrUnexpectedEOF
 	}
 
-	b, err := json.Marshal(w.currRow)
-	if err != nil {
-		return storage.SinkTarget{}, "", err
-	}
-
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(b))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate sink target checksum: %w", err)
-		return storage.SinkTarget{}, "", err
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
-	return *w.currRow, checkSum, nil
+	return *w.currRow, nil
 }

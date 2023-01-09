@@ -1,11 +1,17 @@
 package resourcesvc
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
 	"github.com/yusufsyaifudin/khook/storage"
+	"io"
+	"time"
 )
 
 type ConsumerManagerConfig struct {
@@ -30,10 +36,17 @@ func NewResourceService(cfg ConsumerManagerConfig) (*ConsumerManager, error) {
 }
 
 func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfig) (out OutAddKafkaConfig, err error) {
+	cfg := storage.NewKafkaConnection()
+	cfg.Metadata.Name = in.Label
+	cfg.Spec.Brokers = in.Address
+
 	outPersist, err := c.Config.KafkaConnStore.PersistKafkaConfig(ctx, storage.InputPersistKafkaConfig{
-		KafkaConfig: storage.KafkaConfig{
-			Label:   in.Label,
-			Brokers: in.Address,
+		KafkaConfig: cfg,
+		ResourceState: storage.ResourceState{
+			Rev:       0,
+			Status:    storage.Start,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		},
 	})
 
@@ -61,15 +74,34 @@ func (c *ConsumerManager) GetActiveKafkaConfigs(ctx context.Context) (out OutGet
 
 // AddWebhook add webhook configuration, and later will be managed by manageConsumers to run actual consumer.
 func (c *ConsumerManager) AddWebhook(ctx context.Context, in InputAddWebhook) (out OutAddWebhook, err error) {
+	b, err := json.Marshal(in.Webhook.SinkTarget)
+	if err != nil {
+		return
+	}
+
+	h := sha256.New()
+	_, err = io.Copy(h, bytes.NewReader(b))
+	if err != nil {
+		err = fmt.Errorf("cannot copy to calculate sink target checksum: %w", err)
+		return
+	}
+
+	checkSum := hex.EncodeToString(h.Sum(nil))
+
 	outAddWebhook, err := c.Config.KafkaConsumerStore.PersistKafkaConsumer(ctx, storage.InputPersistKafkaConsumer{
-		SinkTarget: in.Webhook,
+		ConsumerConfigRow: storage.ConsumerConfigRow{
+			Label:              in.Webhook.Label,
+			SinkTargetChecksum: checkSum,
+			SinkTarget:         in.Webhook.SinkTarget,
+			Metadata:           map[string]string{},
+		},
 	})
 	if err != nil {
 		return
 	}
 
 	out = OutAddWebhook{
-		Webhook: outAddWebhook.SinkTarget,
+		Webhook: outAddWebhook.ConsumerConfigRow.SinkTarget,
 	}
 
 	return
@@ -84,12 +116,13 @@ func (c *ConsumerManager) GetWebhooks(ctx context.Context) (out OutGetWebhooks, 
 
 	webhooks := make([]storage.SinkTarget, 0)
 	for outGetWebhook.Next() {
-		webhook, _, _err := outGetWebhook.SinkTarget()
+		webhook, _err := outGetWebhook.ConsumerConfigRow()
 		if _err != nil {
 			err = fmt.Errorf("iterating webhook row: %s", _err)
 			return
 		}
-		webhooks = append(webhooks, webhook)
+
+		webhooks = append(webhooks, webhook.SinkTarget)
 	}
 
 	out = OutGetWebhooks{

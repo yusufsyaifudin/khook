@@ -20,6 +20,7 @@ import (
 
 // CloudEventSink represents a Sarama consumer group consumer
 type CloudEventSink struct {
+	label                  string
 	webhookCfg             storage.SinkTarget
 	chanReadyOrErr         chan error
 	cloudEventHTTPProtocol protocol.Sender
@@ -27,8 +28,9 @@ type CloudEventSink struct {
 
 var _ sarama.ConsumerGroupHandler = (*CloudEventSink)(nil)
 
-func NewCloudEventSink(webhookCfg storage.SinkTarget, chanReadyOrErr chan error) *CloudEventSink {
+func NewCloudEventSink(label string, webhookCfg storage.SinkTarget, chanReadyOrErr chan error) *CloudEventSink {
 	return &CloudEventSink{
+		label:          label,
 		webhookCfg:     webhookCfg,
 		chanReadyOrErr: chanReadyOrErr,
 	}
@@ -36,11 +38,11 @@ func NewCloudEventSink(webhookCfg storage.SinkTarget, chanReadyOrErr chan error)
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
-	log.Printf("[%s] setup consumer", c.webhookCfg.Label)
+	log.Printf("[%s] setup consumer", c.label)
 
 	cloudEventHTTPProtocol, err := cloudevents.NewHTTP(
 		cloudevents.WithShutdownTimeout(30*time.Second),
-		cloudevents.WithHeader("webhook-label", c.webhookCfg.Label),
+		cloudevents.WithHeader("webhook-label", c.label),
 		cloudevents.WithRoundTripper(http.DefaultTransport), // TODO: setup logging
 		cehttp.WithIsRetriableFunc(func(statusCode int) bool {
 			if statusCode >= 400 {
@@ -51,7 +53,7 @@ func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("cannot prepare cloud event for webhook label '%s': %w", c.webhookCfg.Label, err)
+		return fmt.Errorf("cannot prepare cloud event for webhook label '%s': %w", c.label, err)
 	}
 
 	// Mark the c as ready
@@ -62,7 +64,7 @@ func (c *CloudEventSink) Setup(session sarama.ConsumerGroupSession) error {
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
 func (c *CloudEventSink) Cleanup(session sarama.ConsumerGroupSession) error {
-	log.Printf("[%s] clean up consumer", c.webhookCfg.Label)
+	log.Printf("[%s] clean up consumer", c.label)
 	return nil
 }
 
@@ -77,7 +79,7 @@ func (c *CloudEventSink) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 		case message := <-claim.Messages():
 			oriMsg := message // shallow copy
 
-			log.Printf("[%s] Message claimed: value = %s, timestamp = %v, topic = %s", c.webhookCfg.Label, string(oriMsg.Value), oriMsg.Timestamp, oriMsg.Topic)
+			log.Printf("[%s] Message claimed: value = %s, timestamp = %v, topic = %s", c.label, string(oriMsg.Value), oriMsg.Timestamp, oriMsg.Topic)
 
 			// Handle invalid cloud event oriMsg: https://github.com/cloudevents/sdk-go/blob/a7187527ab3278128c1b2a8fe9856d49ecddf25d/samples/kafka/message-handle-non-cloudevents/main.go
 			// The logic is borrowing from here https://github.com/cloudevents/sdk-go/blob/a7187527ab3278128c1b2a8fe9856d49ecddf25d/protocol/kafka_sarama/v2/receiver.go#L55-L69

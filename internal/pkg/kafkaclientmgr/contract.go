@@ -8,7 +8,7 @@ import (
 // Manager is an interface for connection manager
 type Manager interface {
 	GetAllConn(ctx context.Context) (conn []ConnInfo)
-	GetConn(ctx context.Context, label string) (sarama.Client, error)
+	GetConn(ctx context.Context, ns, name string) (sarama.Client, error)
 	Close() error
 }
 

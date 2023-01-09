@@ -1,15 +1,12 @@
 package inmem
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/yusufsyaifudin/khook/storage"
 )
@@ -33,34 +30,24 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 		return
 	}
 
-	kafkaCfg, _ := k.store.LoadOrStore(in.KafkaConfig.Label, in.KafkaConfig)
-
-	b, err := json.Marshal(kafkaCfg)
-	if err != nil {
-		return
-	}
-
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(b))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate config checksum: %w", err)
-		return
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
-
+	kafkaCfg, _ := k.store.LoadOrStore(in.KafkaConfig.Name, in.KafkaConfig)
 	out = storage.OutPersistKafkaConfig{
-		CheckSum:    checkSum,
-		KafkaConfig: kafkaCfg.(storage.KafkaConfig),
+		KafkaConfig: kafkaCfg.(storage.KafkaConnection),
+		ResourceState: storage.ResourceState{
+			Rev:       1,
+			Status:    storage.Start,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
 	}
 	return
 }
 
 func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.KafkaConfigRows, err error) {
-	kafkaConfigs := make([]storage.KafkaConfig, 0)
+	kafkaConfigs := make([]storage.KafkaConnection, 0)
 
 	k.store.Range(func(key, value any) bool {
-		kafkaConfig, ok := value.(storage.KafkaConfig)
+		kafkaConfig, ok := value.(storage.KafkaConnection)
 		if ok {
 			kafkaConfigs = append(kafkaConfigs, kafkaConfig)
 		}
@@ -74,22 +61,10 @@ func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.Kafk
 	return
 }
 
-func (k *KafkaConnStore) DeleteKafkaConfig(ctx context.Context, in storage.InputDeleteKafkaConfig) (out storage.OutDeleteKafkaConfig, err error) {
-	err = validator.Validate(in)
-	if err != nil {
-		err = fmt.Errorf("inmem: input validation error: %w", err)
-		return
-	}
-
-	k.store.Delete(in.Label)
-	out = storage.OutDeleteKafkaConfig{Success: true}
-	return
-}
-
 type KafkaConfigRows struct {
 	lock            sync.Mutex
-	kafkaConfigs    []storage.KafkaConfig
-	currKafkaConfig *storage.KafkaConfig
+	kafkaConfigs    []storage.KafkaConnection
+	currKafkaConfig *storage.KafkaConnection
 }
 
 var _ storage.KafkaConfigRows = (*KafkaConfigRows)(nil)
@@ -106,25 +81,17 @@ func (w *KafkaConfigRows) Next() bool {
 	return false
 }
 
-func (w *KafkaConfigRows) KafkaConfig() (storage.KafkaConfig, string, error) {
+func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnection, storage.ResourceState, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currKafkaConfig == nil {
-		return storage.KafkaConfig{}, "", io.ErrUnexpectedEOF
+		return storage.KafkaConnection{}, storage.ResourceState{}, io.ErrUnexpectedEOF
 	}
 
-	b, err := json.Marshal(w.currKafkaConfig)
-	if err != nil {
-		return storage.KafkaConfig{}, "", err
-	}
-
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(b))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate config checksum: %w", err)
-		return storage.KafkaConfig{}, "", err
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
-	return *w.currKafkaConfig, checkSum, nil
+	return *w.currKafkaConfig, storage.ResourceState{
+		Rev:       1,
+		Status:    storage.Start,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}, nil
 }

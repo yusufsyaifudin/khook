@@ -67,7 +67,7 @@ func (h *HTTP) registerRoutes() {
 	h.router.Put(RouteAddRegisteredWebhooks, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var reqBody storage.SinkTarget
+		var reqBody storage.ConsumerConfigRow
 		bodyDec := json.NewDecoder(r.Body)
 		err := bodyDec.Decode(&reqBody)
 		if err != nil {

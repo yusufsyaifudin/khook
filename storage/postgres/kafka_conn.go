@@ -1,11 +1,8 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,38 +11,39 @@ import (
 	"github.com/sony/sonyflake"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"github.com/yusufsyaifudin/khook/storage"
-	"io"
 	"sync"
 	"time"
 )
 
 const (
 	SqlPersist = `
-INSERT INTO kafka_configs (id, label, config, config_checksum, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) 
-ON CONFLICT (LOWER(label), deleted_at) 
-DO UPDATE SET 
-   config = EXCLUDED.config,
-   config_checksum = EXCLUDED.config_checksum,
-   updated_at = EXCLUDED.updated_at 
-WHERE LOWER(kafka_configs.label) = $2 AND kafka_configs.deleted_at = 0 
+INSERT INTO kafka_configs (id, name, namespace, rev, spec, status, created_at, updated_at) 
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
 RETURNING *;
 `
 
-	SqlGetLastID    = `SELECT id FROM kafka_configs WHERE deleted_at = 0 ORDER BY id DESC LIMIT 1;`
-	SqlGetRowsRange = `SELECT * FROM kafka_configs WHERE id > $1 AND id <= $2 AND deleted_at = 0 ORDER BY id ASC LIMIT 20;`
-	SqlSoftDelete   = `UPDATE FROM kafka_configs SET deleted_at = $2 WHERE LOWER(label) = $1 AND deleted_at = 0 LIMIT 1;`
+	SqlGetLastID    = `SELECT id FROM kafka_configs ORDER BY id DESC LIMIT 1;`
+	SqlGetRowsRange = `SELECT * FROM kafka_configs WHERE id > $1 AND id <= $2 ORDER BY id ASC LIMIT 20;`
 )
 
 type KafkaConfigTable struct {
-	ID             int64               `db:"id"`
-	Label          string              `db:"label"`
-	Config         storage.KafkaConfig `db:"config"`
-	ConfigChecksum string              `db:"config_checksum"`
+	ID int64 `db:"id"` // Internal Postgres ID
+
+	// These field is come from storage.Metadata
+	// Unique index Name and Namespace and Rev must be created to ensure that we can increment the Rev counter
+	Name      string `db:"name"`
+	Namespace string `db:"namespace"`
+	Rev       int    `db:"rev"`
+
+	// Spec store all configuration copy of the Object
+	Spec storage.KafkaConnection `db:"spec"`
+
+	// These field is come from storage.ResourceState
+	Status storage.Status `db:"status"`
 
 	// Timestamp using integer as unix microsecond in UTC
 	CreatedAt int64 `db:"created_at"`
 	UpdatedAt int64 `db:"updated_at"`
-	DeletedAt int64 `db:"deleted_at"`
 }
 
 type Option func(*KafkaConnStoreConfig) error
@@ -134,19 +132,13 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 		return
 	}
 
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(kafkaCfg))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate KafkaConnStoreConfig checksum: %w", err)
-		return
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
-	nowMicro := time.Now().UnixMicro()
+	resourceState := in.ResourceState
 
 	var kafkaConfigOut KafkaConfigTable
 	err = sqlx.GetContext(ctx, k.db, &kafkaConfigOut, SqlPersist,
-		id, in.KafkaConfig.Label, kafkaCfg, checkSum, nowMicro, nowMicro,
+		id, in.KafkaConfig.Name, in.KafkaConfig.Namespace, in.ResourceState.Rev, kafkaCfg,
+		resourceState.Status,
+		resourceState.CreatedAt.UnixMicro(), resourceState.UpdatedAt.UnixMicro(),
 	)
 	if err != nil {
 		err = fmt.Errorf("cannot exec query: %s", err)
@@ -154,8 +146,13 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 	}
 
 	out = storage.OutPersistKafkaConfig{
-		KafkaConfig: kafkaConfigOut.Config,
-		CheckSum:    kafkaConfigOut.ConfigChecksum,
+		KafkaConfig: kafkaConfigOut.Spec,
+		ResourceState: storage.ResourceState{
+			Rev:       kafkaConfigOut.Rev,
+			Status:    kafkaConfigOut.Status,
+			CreatedAt: time.UnixMicro(kafkaConfigOut.CreatedAt),
+			UpdatedAt: time.UnixMicro(kafkaConfigOut.UpdatedAt),
+		},
 	}
 	return
 }
@@ -166,7 +163,7 @@ func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.Kafk
 	}{}
 	err = sqlx.GetContext(ctx, k.db, &lastRow, SqlGetLastID)
 	if errors.Is(err, sql.ErrNoRows) {
-		rows = &storage.NoRows{}
+		rows = &storage.KafkaConfigNoRows{}
 		err = nil
 		return
 	}
@@ -181,26 +178,6 @@ func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.Kafk
 		lastID:   lastRow.LastID,
 		db:       k.db,
 		currRows: make([]KafkaConfigTable, 0),
-	}
-
-	return
-}
-
-func (k *KafkaConnStore) DeleteKafkaConfig(ctx context.Context, in storage.InputDeleteKafkaConfig) (out storage.OutDeleteKafkaConfig, err error) {
-	err = validator.Validate(in)
-	if err != nil {
-		err = fmt.Errorf("postgres: input validation error: %w", err)
-		return
-	}
-
-	_, err = k.db.ExecContext(ctx, SqlSoftDelete, in.Label, time.Now().UnixMicro())
-	if err != nil {
-		err = fmt.Errorf("cannot delete from postgre: %w", err)
-		return
-	}
-
-	out = storage.OutDeleteKafkaConfig{
-		Success: true,
 	}
 
 	return
@@ -247,8 +224,8 @@ func (k *KafkaConfigRows) Next() bool {
 		k.currRowsErr = err
 		k.stopFetchDb = true
 
-		// return true, so the first call of Next will still has the chance to call the KafkaConfig.
-		// But, since the KafkaConfig return error, user may break the loop,
+		// return true, so the first call of Next will still has the chance to call the KafkaConnection.
+		// But, since the KafkaConnection return error, user may break the loop,
 		// or if not, then stopFetchDb will stop the next iteration.
 		return true
 	}
@@ -271,13 +248,18 @@ func (k *KafkaConfigRows) Next() bool {
 	return true
 }
 
-func (k *KafkaConfigRows) KafkaConfig() (storage.KafkaConfig, string, error) {
+func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnection, storage.ResourceState, error) {
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 
 	if k.currRowsErr != nil {
-		return storage.KafkaConfig{}, "", k.currRowsErr
+		return storage.KafkaConnection{}, storage.ResourceState{}, k.currRowsErr
 	}
 
-	return k.currRow.Config, k.currRow.ConfigChecksum, nil
+	return k.currRow.Spec, storage.ResourceState{
+		Rev:       k.currRow.Rev,
+		Status:    k.currRow.Status,
+		CreatedAt: time.UnixMicro(k.currRow.CreatedAt),
+		UpdatedAt: time.UnixMicro(k.currRow.UpdatedAt),
+	}, nil
 }

@@ -9,16 +9,15 @@ type KafkaConsumerStore interface {
 }
 
 type InputPersistKafkaConsumer struct {
-	SinkTarget SinkTarget `validate:"required"`
+	ConsumerConfigRow ConsumerConfigRow `validate:"required"`
 }
 
 type OutPersistKafkaConsumer struct {
-	Checksum   string
-	SinkTarget SinkTarget
+	ConsumerConfigRow ConsumerConfigRow
 }
 
 // KafkaConsumerRows contains list of SinkTarget
 type KafkaConsumerRows interface {
 	Next() bool
-	SinkTarget() (w SinkTarget, checksum string, err error)
+	ConsumerConfigRow() (w ConsumerConfigRow, err error)
 }

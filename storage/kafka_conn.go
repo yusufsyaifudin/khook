@@ -4,21 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 )
 
 type KafkaConnStore interface {
 	PersistKafkaConfig(ctx context.Context, in InputPersistKafkaConfig) (out OutPersistKafkaConfig, err error)
 	GetKafkaConfigs(ctx context.Context) (rows KafkaConfigRows, err error)
-	DeleteKafkaConfig(ctx context.Context, in InputDeleteKafkaConfig) (out OutDeleteKafkaConfig, err error)
 }
 
-type KafkaConfig struct {
-	Label   string   `json:"label" validate:"required"`
-	Brokers []string `json:"brokers,omitempty" validate:"required"`
+type KafkaConnection struct {
+	Type     `json:",inline" validate:"required"`
+	Metadata `json:",inline" validate:"required"`
+
+	Spec KafkaConfigSpec `json:"spec" validate:"required"`
 }
 
-// Scan will read the data bytes from database and parse it as KafkaConfig
-func (m *KafkaConfig) Scan(src interface{}) error {
+// Scan will read the data bytes from database and parse it as KafkaConnection
+func (m *KafkaConnection) Scan(src interface{}) error {
 	if m == nil {
 		return fmt.Errorf("error scan service account on nil struct")
 	}
@@ -33,31 +35,44 @@ func (m *KafkaConfig) Scan(src interface{}) error {
 	return fmt.Errorf("unknown type %T to format as kafka config", src)
 }
 
-type KafkaConfigRows interface {
-	Next() bool
-	KafkaConfig() (cfg KafkaConfig, checkSum string, err error)
+func NewKafkaConnection() KafkaConnection {
+	conn := KafkaConnection{
+		Type: Type{
+			ApiVersion: "khook/v1",
+			Kind:       "KafkaBrokerConnection",
+		},
+		Metadata: Metadata{
+			Namespace: "default",
+		},
+		Spec: KafkaConfigSpec{},
+	}
+	return conn
 }
 
-type NoRows struct{}
+type KafkaConfigSpec struct {
+	Brokers []string `json:"brokers,omitempty" validate:"required"`
+}
 
-var _ KafkaConfigRows = (*NoRows)(nil)
+type KafkaConfigRows interface {
+	Next() bool
+	KafkaConnection() (cfg KafkaConnection, state ResourceState, err error)
+}
 
-func (n *NoRows) Next() bool                                { return false }
-func (n *NoRows) KafkaConfig() (KafkaConfig, string, error) { return KafkaConfig{}, "", nil }
+type KafkaConfigNoRows struct{}
+
+var _ KafkaConfigRows = (*KafkaConfigNoRows)(nil)
+
+func (n *KafkaConfigNoRows) Next() bool { return false }
+func (n *KafkaConfigNoRows) KafkaConnection() (KafkaConnection, ResourceState, error) {
+	return KafkaConnection{}, ResourceState{}, os.ErrNotExist
+}
 
 type InputPersistKafkaConfig struct {
-	KafkaConfig KafkaConfig `validate:"required"`
+	KafkaConfig   KafkaConnection `validate:"required"`
+	ResourceState ResourceState   `validate:"required"`
 }
 
 type OutPersistKafkaConfig struct {
-	CheckSum    string
-	KafkaConfig KafkaConfig
-}
-
-type InputDeleteKafkaConfig struct {
-	Label string `validate:"required"`
-}
-
-type OutDeleteKafkaConfig struct {
-	Success bool
+	KafkaConfig   KafkaConnection
+	ResourceState ResourceState
 }

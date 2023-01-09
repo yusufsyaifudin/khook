@@ -5,16 +5,30 @@ import (
 	"fmt"
 )
 
+// ConsumerConfigRow represent the database structure in table (sql) or document (no-sql).
+type ConsumerConfigRow struct {
+	Label              string     `json:"label,omitempty" db:"label" validate:"required"`
+	SinkTargetChecksum string     `json:"sink_target_checksum,omitempty" db:"sink_target_checksum" validate:"required"`
+	SinkTarget         SinkTarget `json:"sink_target,omitempty" db:"sink_target" validate:"required"`
+
+	// Metadata is to save additional property that belongs to this stream.
+	Metadata map[string]string `json:"metadata,omitempty" db:"metadata" validate:"-"`
+}
+
 // SinkTarget contains contract on how sink is processed.
 // Detail implementation would be in internal/pkg/kafkaconsumermgr
 // The minimal and easiest to understand of SinkTarget is CloudEvents,
-// where message from KafkaConfig (in specific topic) is sent via HTTP
+// where message from KafkaConnection (in specific topic) is sent via HTTP
 // as specified in the CloudEvents.URL as CloudEvents message.
 type SinkTarget struct {
-	Label string `json:"label,omitempty" validate:"required"`
-	Type  string `json:"type,omitempty" validate:"required"`
+	Type string `json:"type,omitempty" validate:"required"`
 
-	// KafkaConfigLabel is the KafkaConfig.Label as the stream source.
+	// Group represent the group name of this stream.
+	// This later can be use to filter which server that runs this consumer.
+	// For example, server in deployment Node A only run the consumer in Group A.
+	Group string `json:"group,omitempty" validate:"-"`
+
+	// KafkaConfigLabel is the KafkaConnection.Name as the stream source.
 	KafkaConfigLabel string `json:"kafka_config_label,omitempty" validate:"required"`
 
 	// KafkaTopic is limited to one topic per webhook.

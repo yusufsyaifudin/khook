@@ -17,14 +17,14 @@ type ResourceService interface {
 	GetPausedWebhooks(ctx context.Context) (out OutGetPausedWebhooks, err error)
 }
 
-// InAddKafkaConfig is similar like storage.KafkaConfig but without ID
+// InAddKafkaConfig is similar like storage.KafkaConnection but without ID
 type InAddKafkaConfig struct {
 	Label   string   `json:"label"`
 	Address []string `json:"address,omitempty"`
 }
 
 type OutAddKafkaConfig struct {
-	KafkaConfig storage.KafkaConfig `json:"kafka_config"`
+	KafkaConfig storage.KafkaConnection `json:"kafka_config"`
 }
 
 type OutGetActiveKafkaConfigs struct {
@@ -33,7 +33,7 @@ type OutGetActiveKafkaConfigs struct {
 }
 
 type InputAddWebhook struct {
-	Webhook storage.SinkTarget `json:"webhook"`
+	Webhook storage.ConsumerConfigRow `json:"webhook"`
 }
 
 type OutAddWebhook struct {
