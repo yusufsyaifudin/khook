@@ -10,7 +10,7 @@
 This project is still in POC status. If you want to contribute, then nice! THANKS!
 
 ## What is this?
-**khook* is a basic Kafka Consumer that translate all your Kafka message into [CloudEvents](https://cloudevents.io/).
+**khook** is a basic Kafka Consumer that translate all your Kafka message into [CloudEvents](https://cloudevents.io/).
 By joining force from the two world, we can make our event stream more consistent, accessible, and portable 
 (where we get from CloudEvents<sup>1</sup>), and at the same time make our stream more performant and reliable (by using Kafka<sup>2</sup>).
 
