@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
-	"io"
-	"sync"
-	"time"
-
 	"github.com/yusufsyaifudin/khook/storage"
+	"io"
+	"os"
+	"sync"
 )
 
 type KafkaConnStore struct {
-	store sync.Map
+	store      sync.Map
+	storeState sync.Map
 }
 
 var _ storage.KafkaConnStore = (*KafkaConnStore)(nil)
@@ -23,51 +23,76 @@ func NewKafkaConnStore() *KafkaConnStore {
 	}
 }
 
-func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.InputPersistKafkaConfig) (out storage.OutPersistKafkaConfig, err error) {
+func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.InPersistKafkaConnConfig) (out storage.OutPersistKafkaConnConfig, err error) {
 	err = validator.Validate(in)
 	if err != nil {
 		err = fmt.Errorf("inmem: kafka config validation error: %w", err)
 		return
 	}
 
-	kafkaCfg, _ := k.store.LoadOrStore(in.KafkaConfig.Name, in.KafkaConfig)
-	out = storage.OutPersistKafkaConfig{
-		KafkaConfig: kafkaCfg.(storage.KafkaConnection),
-		ResourceState: storage.ResourceState{
-			Rev:       1,
-			Status:    storage.Start,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
+	id := fmt.Sprintf("%s:%s", in.KafkaConfig.Namespace, in.KafkaConfig.Name)
+	kafkaCfg, _ := k.store.LoadOrStore(id, in.KafkaConfig)
+	state, _ := k.storeState.LoadOrStore(id, in.ResourceState)
+
+	out = storage.OutPersistKafkaConnConfig{
+		KafkaConfig:   kafkaCfg.(storage.KafkaConnectionConfig),
+		ResourceState: state.(storage.ResourceState),
 	}
 	return
 }
 
-func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.KafkaConfigRows, err error) {
-	kafkaConfigs := make([]storage.KafkaConnection, 0)
+func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.KafkaConnConfigRows, err error) {
+	kafkaConfigs := make([]storage.KafkaConnectionConfig, 0)
+	states := make(map[string]storage.ResourceState)
 
 	k.store.Range(func(key, value any) bool {
-		kafkaConfig, ok := value.(storage.KafkaConnection)
-		if ok {
-			kafkaConfigs = append(kafkaConfigs, kafkaConfig)
-		}
+		kafkaConfigs = append(kafkaConfigs, value.(storage.KafkaConnectionConfig))
+		return true
+	})
 
+	k.storeState.Range(func(key, value any) bool {
+		states[key.(string)] = value.(storage.ResourceState)
 		return true
 	})
 
 	rows = &KafkaConfigRows{
 		kafkaConfigs: kafkaConfigs,
+		states:       states,
 	}
+	return
+}
+
+func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGetKafkaConnConfig) (out storage.OutGetKafkaConnConfig, err error) {
+	id := fmt.Sprintf("%s:%s", in.Namespace, in.Name)
+
+	cfg, exist := k.store.Load(id)
+	if !exist {
+		err = os.ErrNotExist
+		return
+	}
+
+	state, exist := k.storeState.Load(id)
+	if !exist {
+		err = os.ErrNotExist
+		return
+	}
+
+	out = storage.OutGetKafkaConnConfig{
+		KafkaConfig:   cfg.(storage.KafkaConnectionConfig),
+		ResourceState: state.(storage.ResourceState),
+	}
+
 	return
 }
 
 type KafkaConfigRows struct {
 	lock            sync.Mutex
-	kafkaConfigs    []storage.KafkaConnection
-	currKafkaConfig *storage.KafkaConnection
+	kafkaConfigs    []storage.KafkaConnectionConfig
+	states          map[string]storage.ResourceState
+	currKafkaConfig *storage.KafkaConnectionConfig
 }
 
-var _ storage.KafkaConfigRows = (*KafkaConfigRows)(nil)
+var _ storage.KafkaConnConfigRows = (*KafkaConfigRows)(nil)
 
 func (w *KafkaConfigRows) Next() bool {
 	w.lock.Lock()
@@ -81,17 +106,13 @@ func (w *KafkaConfigRows) Next() bool {
 	return false
 }
 
-func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnection, storage.ResourceState, error) {
+func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, storage.ResourceState, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currKafkaConfig == nil {
-		return storage.KafkaConnection{}, storage.ResourceState{}, io.ErrUnexpectedEOF
+		return storage.KafkaConnectionConfig{}, storage.ResourceState{}, io.ErrUnexpectedEOF
 	}
 
-	return *w.currKafkaConfig, storage.ResourceState{
-		Rev:       1,
-		Status:    storage.Start,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}, nil
+	id := fmt.Sprintf("%s:%s", w.currKafkaConfig.Namespace, w.currKafkaConfig.Name)
+	return *w.currKafkaConfig, w.states[id], nil
 }

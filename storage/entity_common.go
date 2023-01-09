@@ -1,8 +1,15 @@
 package storage
 
+type Kind string
+
+const (
+	KindKafkaConnection Kind = "KafkaBrokerConnection"
+	KindKafkaConsumer   Kind = "KafkaConsumer"
+)
+
 type Type struct {
 	ApiVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
+	Kind       Kind   `json:"kind"`
 }
 
 type Metadata struct {

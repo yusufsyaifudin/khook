@@ -22,6 +22,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 `
 
+	SqlGetOne       = `SELECT * FROM kafka_configs WHERE name = $1 AND namespace $2 ORDER BY rev DESC LIMIT 1;`
 	SqlGetLastID    = `SELECT id FROM kafka_configs ORDER BY id DESC LIMIT 1;`
 	SqlGetRowsRange = `SELECT * FROM kafka_configs WHERE id > $1 AND id <= $2 ORDER BY id ASC LIMIT 20;`
 )
@@ -36,7 +37,7 @@ type KafkaConfigTable struct {
 	Rev       int    `db:"rev"`
 
 	// Spec store all configuration copy of the Object
-	Spec storage.KafkaConnection `db:"spec"`
+	Spec storage.KafkaConnectionConfig `db:"spec"`
 
 	// These field is come from storage.ResourceState
 	Status storage.Status `db:"status"`
@@ -113,7 +114,7 @@ func NewKafkaConnStore(opts ...Option) (*KafkaConnStore, error) {
 	}, nil
 }
 
-func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.InputPersistKafkaConfig) (out storage.OutPersistKafkaConfig, err error) {
+func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.InPersistKafkaConnConfig) (out storage.OutPersistKafkaConnConfig, err error) {
 	err = validator.Validate(in)
 	if err != nil {
 		err = fmt.Errorf("postgres: input validation error: %w", err)
@@ -145,7 +146,7 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 		return
 	}
 
-	out = storage.OutPersistKafkaConfig{
+	out = storage.OutPersistKafkaConnConfig{
 		KafkaConfig: kafkaConfigOut.Spec,
 		ResourceState: storage.ResourceState{
 			Rev:       kafkaConfigOut.Rev,
@@ -157,7 +158,28 @@ func (k *KafkaConnStore) PersistKafkaConfig(ctx context.Context, in storage.Inpu
 	return
 }
 
-func (k *KafkaConnStore) GetKafkaConfigs(ctx context.Context) (rows storage.KafkaConfigRows, err error) {
+func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGetKafkaConnConfig) (out storage.OutGetKafkaConnConfig, err error) {
+
+	var row KafkaConfigTable
+	err = sqlx.GetContext(ctx, k.db, &row, SqlGetOne, in.Name, in.Namespace)
+	if err != nil {
+		err = fmt.Errorf("cannot resource for name '%s' ns '%s': %w", in.Name, in.Namespace, err)
+		return
+	}
+
+	out = storage.OutGetKafkaConnConfig{
+		KafkaConfig: row.Spec,
+		ResourceState: storage.ResourceState{
+			Rev:       row.Rev,
+			Status:    row.Status,
+			CreatedAt: time.UnixMicro(row.CreatedAt),
+			UpdatedAt: time.UnixMicro(row.UpdatedAt),
+		},
+	}
+	return
+}
+
+func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.KafkaConnConfigRows, err error) {
 	lastRow := struct {
 		LastID int64 `db:"id"`
 	}{}
@@ -198,7 +220,7 @@ type KafkaConfigRows struct {
 	currRowsErr error
 }
 
-var _ storage.KafkaConfigRows = (*KafkaConfigRows)(nil)
+var _ storage.KafkaConnConfigRows = (*KafkaConfigRows)(nil)
 
 func (k *KafkaConfigRows) Next() bool {
 	k.lock.Lock()
@@ -224,8 +246,8 @@ func (k *KafkaConfigRows) Next() bool {
 		k.currRowsErr = err
 		k.stopFetchDb = true
 
-		// return true, so the first call of Next will still has the chance to call the KafkaConnection.
-		// But, since the KafkaConnection return error, user may break the loop,
+		// return true, so the first call of Next will still has the chance to call the KafkaConnectionConfig.
+		// But, since the KafkaConnectionConfig return error, user may break the loop,
 		// or if not, then stopFetchDb will stop the next iteration.
 		return true
 	}
@@ -248,12 +270,12 @@ func (k *KafkaConfigRows) Next() bool {
 	return true
 }
 
-func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnection, storage.ResourceState, error) {
+func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, storage.ResourceState, error) {
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 
 	if k.currRowsErr != nil {
-		return storage.KafkaConnection{}, storage.ResourceState{}, k.currRowsErr
+		return storage.KafkaConnectionConfig{}, storage.ResourceState{}, k.currRowsErr
 	}
 
 	return k.currRow.Spec, storage.ResourceState{

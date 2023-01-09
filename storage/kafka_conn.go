@@ -8,19 +8,58 @@ import (
 )
 
 type KafkaConnStore interface {
-	PersistKafkaConfig(ctx context.Context, in InputPersistKafkaConfig) (out OutPersistKafkaConfig, err error)
-	GetKafkaConfigs(ctx context.Context) (rows KafkaConfigRows, err error)
+	PersistKafkaConnConfig(ctx context.Context, in InPersistKafkaConnConfig) (out OutPersistKafkaConnConfig, err error)
+	GetKafkaConnConfig(ctx context.Context, in InGetKafkaConnConfig) (out OutGetKafkaConnConfig, err error)
+	GetKafkaConnConfigs(ctx context.Context) (rows KafkaConnConfigRows, err error)
 }
 
-type KafkaConnection struct {
+type InPersistKafkaConnConfig struct {
+	KafkaConfig   KafkaConnectionConfig `validate:"required"`
+	ResourceState ResourceState         `validate:"required"`
+}
+
+type OutPersistKafkaConnConfig struct {
+	KafkaConfig   KafkaConnectionConfig
+	ResourceState ResourceState
+}
+
+type InGetKafkaConnConfig struct {
+	Namespace string `validate:"required"`
+	Name      string `validate:"required"`
+}
+
+type OutGetKafkaConnConfig struct {
+	KafkaConfig   KafkaConnectionConfig
+	ResourceState ResourceState
+}
+
+type KafkaConnConfigRows interface {
+	Next() bool
+	KafkaConnection() (cfg KafkaConnectionConfig, state ResourceState, err error)
+}
+
+type KafkaConfigNoRows struct{}
+
+var _ KafkaConnConfigRows = (*KafkaConfigNoRows)(nil)
+
+func (n *KafkaConfigNoRows) Next() bool { return false }
+func (n *KafkaConfigNoRows) KafkaConnection() (KafkaConnectionConfig, ResourceState, error) {
+	return KafkaConnectionConfig{}, ResourceState{}, os.ErrNotExist
+}
+
+type KafkaConfigSpec struct {
+	Brokers []string `json:"brokers,omitempty" validate:"required"`
+}
+
+type KafkaConnectionConfig struct {
 	Type     `json:",inline" validate:"required"`
 	Metadata `json:",inline" validate:"required"`
 
 	Spec KafkaConfigSpec `json:"spec" validate:"required"`
 }
 
-// Scan will read the data bytes from database and parse it as KafkaConnection
-func (m *KafkaConnection) Scan(src interface{}) error {
+// Scan will read the data bytes from database and parse it as KafkaConnectionConfig
+func (m *KafkaConnectionConfig) Scan(src interface{}) error {
 	if m == nil {
 		return fmt.Errorf("error scan service account on nil struct")
 	}
@@ -35,11 +74,11 @@ func (m *KafkaConnection) Scan(src interface{}) error {
 	return fmt.Errorf("unknown type %T to format as kafka config", src)
 }
 
-func NewKafkaConnection() KafkaConnection {
-	conn := KafkaConnection{
+func NewKafkaConnectionConfig() KafkaConnectionConfig {
+	conn := KafkaConnectionConfig{
 		Type: Type{
 			ApiVersion: "khook/v1",
-			Kind:       "KafkaBrokerConnection",
+			Kind:       KindKafkaConnection,
 		},
 		Metadata: Metadata{
 			Namespace: "default",
@@ -47,32 +86,4 @@ func NewKafkaConnection() KafkaConnection {
 		Spec: KafkaConfigSpec{},
 	}
 	return conn
-}
-
-type KafkaConfigSpec struct {
-	Brokers []string `json:"brokers,omitempty" validate:"required"`
-}
-
-type KafkaConfigRows interface {
-	Next() bool
-	KafkaConnection() (cfg KafkaConnection, state ResourceState, err error)
-}
-
-type KafkaConfigNoRows struct{}
-
-var _ KafkaConfigRows = (*KafkaConfigNoRows)(nil)
-
-func (n *KafkaConfigNoRows) Next() bool { return false }
-func (n *KafkaConfigNoRows) KafkaConnection() (KafkaConnection, ResourceState, error) {
-	return KafkaConnection{}, ResourceState{}, os.ErrNotExist
-}
-
-type InputPersistKafkaConfig struct {
-	KafkaConfig   KafkaConnection `validate:"required"`
-	ResourceState ResourceState   `validate:"required"`
-}
-
-type OutPersistKafkaConfig struct {
-	KafkaConfig   KafkaConnection
-	ResourceState ResourceState
 }

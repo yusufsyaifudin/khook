@@ -5,19 +5,31 @@ import "context"
 type KafkaConsumerStore interface {
 	PersistKafkaConsumer(ctx context.Context, in InputPersistKafkaConsumer) (out OutPersistKafkaConsumer, err error)
 	GetKafkaConsumers(ctx context.Context) (out KafkaConsumerRows, err error)
-	GetSinkTargetByLabel(ctx context.Context, label string) (out SinkTarget, err error)
+	GetKafkaConsumer(ctx context.Context, in InGetKafkaConsumer) (out OutGetKafkaConsumer, err error)
 }
 
 type InputPersistKafkaConsumer struct {
-	ConsumerConfigRow ConsumerConfigRow `validate:"required"`
+	KafkaConsumerConfig KafkaConsumerConfig `validate:"required"`
+	ResourceState       ResourceState       `validate:"required"`
 }
 
 type OutPersistKafkaConsumer struct {
-	ConsumerConfigRow ConsumerConfigRow
+	KafkaConsumerConfig KafkaConsumerConfig
+	ResourceState       ResourceState
 }
 
-// KafkaConsumerRows contains list of SinkTarget
+type InGetKafkaConsumer struct {
+	Namespace string `validate:"required"`
+	Name      string `validate:"required"`
+}
+
+type OutGetKafkaConsumer struct {
+	KafkaConsumerConfig KafkaConsumerConfig
+	ResourceState       ResourceState
+}
+
+// KafkaConsumerRows contains list of KafkaConsumerConfig
 type KafkaConsumerRows interface {
 	Next() bool
-	ConsumerConfigRow() (w ConsumerConfigRow, err error)
+	KafkaConsumerConfig() (w KafkaConsumerConfig, state ResourceState, err error)
 }

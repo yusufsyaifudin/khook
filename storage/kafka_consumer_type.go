@@ -5,43 +5,47 @@ import (
 	"fmt"
 )
 
-// ConsumerConfigRow represent the database structure in table (sql) or document (no-sql).
-type ConsumerConfigRow struct {
-	Label              string     `json:"label,omitempty" db:"label" validate:"required"`
-	SinkTargetChecksum string     `json:"sink_target_checksum,omitempty" db:"sink_target_checksum" validate:"required"`
-	SinkTarget         SinkTarget `json:"sink_target,omitempty" db:"sink_target" validate:"required"`
-
-	// Metadata is to save additional property that belongs to this stream.
-	Metadata map[string]string `json:"metadata,omitempty" db:"metadata" validate:"-"`
+// KafkaConsumerConfig .
+type KafkaConsumerConfig struct {
+	Type     `json:",inline" validate:"required"`
+	Metadata `json:",inline" validate:"required"`
+	Spec     ConsumerConfigSpec `json:"spec,omitempty" validate:"required"`
 }
 
-// SinkTarget contains contract on how sink is processed.
-// Detail implementation would be in internal/pkg/kafkaconsumermgr
-// The minimal and easiest to understand of SinkTarget is CloudEvents,
-// where message from KafkaConnection (in specific topic) is sent via HTTP
-// as specified in the CloudEvents.URL as CloudEvents message.
-type SinkTarget struct {
-	Type string `json:"type,omitempty" validate:"required"`
+func NewKafkaConsumerConfig() KafkaConsumerConfig {
+	cfg := KafkaConsumerConfig{
+		Type: Type{
+			ApiVersion: "khook/v1",
+			Kind:       KindKafkaConsumer,
+		},
+		Metadata: Metadata{
+			Namespace: "default",
+		},
+	}
+	return cfg
+}
 
-	// Group represent the group name of this stream.
-	// This later can be use to filter which server that runs this consumer.
-	// For example, server in deployment Node A only run the consumer in Group A.
-	Group string `json:"group,omitempty" validate:"-"`
-
-	// KafkaConfigLabel is the KafkaConnection.Name as the stream source.
-	KafkaConfigLabel string `json:"kafka_config_label,omitempty" validate:"required"`
+type ConsumerConfigKafkaClientSelector struct {
+	Name string `json:"name" validate:"required"`
 
 	// KafkaTopic is limited to one topic per webhook.
 	// This add visibility to the user, where list of SinkTarget only get message from one Kafka topic,
 	// unless they register the same URL on WebhookSink from the WebhookSource.KafkaTopic
 	KafkaTopic string `json:"kafka_topic,omitempty" validate:"required"`
+}
 
-	// KafkaTopicDLQ is where the stream is DLQ-ed if it cannot be sinked to the WebhookSink.
-	// If empty, then it will generate the random Kafka topic.
-	// Please ensure that KafkaTopicDLQ is not the same as KafkaTopic, otherwise you will get an infinite-loop.
-	// Also, make sure that KafkaTopicDLQ is only used by one stream, or the data may mix with another stream.
-	KafkaTopicDLQ string `json:"kafka_topic_dlq,omitempty" validate:"required"`
+type ConsumerConfigSpec struct {
+	Selector   ConsumerConfigKafkaClientSelector `json:"selector" validate:"required"`
+	SinkTarget SinkTarget                        `json:"sinkTarget" validate:"required"`
+}
 
+// SinkTarget contains contract on how sink is processed.
+// Detail implementation would be in internal/pkg/kafkaconsumermgr
+// The minimal and easiest to understand of SinkTarget is CloudEvents,
+// where message from KafkaConnectionConfig (in specific topic) is sent via HTTP
+// as specified in the CloudEvents.URL as CloudEvents message.
+type SinkTarget struct {
+	Type        string       `json:"type,omitempty" validate:"required"`
 	CloudEvents *CloudEvents `json:"cloudevents,omitempty" validate:"required_if=Type cloudevents"`
 }
 

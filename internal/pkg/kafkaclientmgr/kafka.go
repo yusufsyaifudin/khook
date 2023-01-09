@@ -66,7 +66,7 @@ func NewKafkaClientManager(opts ...KafkaOpt) (*KafkaClientManager, error) {
 	return svc, nil
 }
 
-func (k *KafkaClientManager) getConnID(kafkaCfg storage.KafkaConnection) string {
+func (k *KafkaClientManager) getConnID(kafkaCfg storage.KafkaConnectionConfig) string {
 	return k.getConnIDScoped(kafkaCfg.Namespace, kafkaCfg.Name)
 }
 
@@ -75,7 +75,7 @@ func (k *KafkaClientManager) getConnIDScoped(ns, name string) string {
 }
 
 // addOrRefreshConnection Add new connection, but before that, make sure the connection is not duplicate.
-func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnection, resourceState storage.ResourceState) {
+func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnectionConfig, resourceState storage.ResourceState) {
 	connID := k.getConnID(kafkaCfg)
 
 	k.kafkaConnLock.RLock() // lock read
@@ -197,7 +197,7 @@ func (k *KafkaClientManager) manageConnection() {
 // Then, in another code, we can use Redis as distributed state management to
 // distribute number of consumers depending on Kafka partition.
 func (k *KafkaClientManager) updateConnections() {
-	outKafkaCfg, err := k.kafkaOpt.kafkaConnStore.GetKafkaConfigs(context.Background())
+	outKafkaCfg, err := k.kafkaOpt.kafkaConnStore.GetKafkaConnConfigs(context.Background())
 	if err != nil {
 		log.Printf("cannot list kafka config during rebalance, your connection may be outdated: %s\n", err)
 		return
@@ -238,7 +238,7 @@ func (k *KafkaClientManager) updateConnections() {
 		// add or refresh connection if not exist using go routine
 		// so, we can have multiple try to open connection
 		wg.Add(1)
-		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnection, _state storage.ResourceState) {
+		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnectionConfig, _state storage.ResourceState) {
 			defer func() {
 				_wg.Done()
 				k.sem.Release(1)
@@ -369,7 +369,7 @@ func (k *KafkaClientManager) GetConn(ctx context.Context, ns, name string) (sara
 		k.kafkaConnLock.Lock()
 		delete(k.kafkaConnMap, connID)
 		k.kafkaConnLock.Unlock()
-		return nil, fmt.Errorf("cannot get kafka connection for name '%s'", name)
+		return nil, fmt.Errorf("cannot get kafka connection for name '%s' ns '%s'", name, ns)
 	}
 
 	k.kafkaConnLock.RUnlock()

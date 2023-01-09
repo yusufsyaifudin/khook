@@ -21,6 +21,11 @@ type kafkaOpt struct {
 	updateEvery        time.Duration
 }
 
+type consGroupInfo struct {
+	Name      string
+	Namespace string
+}
+
 // KafkaConsumerManager is a manager to connect between Kafka topic to Sink
 type KafkaConsumerManager struct {
 	kafkaOpt              *kafkaOpt
@@ -28,9 +33,11 @@ type KafkaConsumerManager struct {
 
 	mKafkaConsGroup sync.RWMutex
 
-	// kafkaConsGroup contains KafkaClientManager ConsumerGroup connection with the SinkTarget label as key.
+	// kafkaConsGroup contains KafkaClientManager ConsumerGroup connection with the kafka client id as key.
 	// SinkTarget label must be unique.
 	kafkaConsGroup map[string]sarama.ConsumerGroup
+
+	kafkaConsGroupInfo map[string]*consGroupInfo
 
 	// kafkaPausedConsGroup contains paused KafkaClientManager ConsumerGroup connection.
 	kafkaPausedConsGroup map[string]sarama.ConsumerGroup
@@ -52,6 +59,7 @@ func NewKafkaConsumerManager(opts ...KafkaOpt) (*KafkaConsumerManager, error) {
 		tickerRefreshConsumer: time.NewTicker(defaultOpt.updateEvery + (time.Duration(rand.Int63n(150)) * time.Millisecond)),
 		mKafkaConsGroup:       sync.RWMutex{},
 		kafkaConsGroup:        make(map[string]sarama.ConsumerGroup),
+		kafkaConsGroupInfo:    make(map[string]*consGroupInfo),
 		kafkaPausedConsGroup:  make(map[string]sarama.ConsumerGroup),
 	}
 
@@ -74,18 +82,19 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 			}
 
 			for kafkaConsumers.Next() {
-				consumerCfg, _err := kafkaConsumers.ConsumerConfigRow()
+				consumerCfg, _, _err := kafkaConsumers.KafkaConsumerConfig()
 				if _err != nil {
 					log.Printf("getting sink target row error: %s\n", _err)
 					continue
 				}
 
-				sourceKafkaConnLabel := consumerCfg.Label
-				targetSinkLabel := consumerCfg.Label
-				topicSource := consumerCfg.SinkTarget.KafkaTopic
+				connID := fmt.Sprintf("%s:%s", consumerCfg.Namespace, consumerCfg.Name)
+				targetSinkLabel := consumerCfg.Name
+				sourceKafkaConnLabel := consumerCfg.Spec.Selector.Name
+				topicSource := consumerCfg.Spec.Selector.KafkaTopic
 
 				k.mKafkaConsGroup.RLock()
-				_, consumerGroupExist := k.kafkaConsGroup[targetSinkLabel]
+				_, consumerGroupExist := k.kafkaConsGroup[connID]
 				if consumerGroupExist {
 					log.Printf("already registered sink %s from kafka %s\n", targetSinkLabel, topicSource)
 
@@ -93,17 +102,18 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 					continue
 				}
 
-				_, consumerGroupPausedExist := k.kafkaPausedConsGroup[targetSinkLabel]
+				_, consumerGroupPausedExist := k.kafkaPausedConsGroup[connID]
 				if consumerGroupPausedExist {
 					log.Printf("paused consumer %s from kafka %s already registered\n", targetSinkLabel, topicSource)
 
 					k.mKafkaConsGroup.RUnlock()
+
 					continue
 				}
 				k.mKafkaConsGroup.RUnlock()
 
 				log.Printf("add %s to consume kafka topic %s\n", targetSinkLabel, topicSource)
-				kafkaClient, err := k.kafkaOpt.kafkaClientManager.GetConn(context.Background(), "default", sourceKafkaConnLabel)
+				kafkaClient, err := k.kafkaOpt.kafkaClientManager.GetConn(context.Background(), consumerCfg.Namespace, sourceKafkaConnLabel)
 				if err != nil {
 					log.Printf(
 						"error kafka connection '%s' for consumer '%s' to consumer topic '%s': %s\n",
@@ -132,7 +142,7 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 				// isConnUpOrErr will wait either nil error (come from Setup consumer handler)
 				// or error from sarama.ConsumerGroupHandler.Consume inside function InitConsumer
 				isConnUpOrErr := make(chan error, 1)
-				processor, procErr := sipper.SelectProcessor(targetSinkLabel, consumerCfg.SinkTarget, isConnUpOrErr)
+				processor, procErr := sipper.SelectProcessor(targetSinkLabel, consumerCfg.Spec.SinkTarget, isConnUpOrErr)
 				if procErr != nil {
 					log.Printf("cannot select processor: %s\n", procErr)
 					continue
@@ -155,7 +165,11 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 					)
 
 					k.mKafkaConsGroup.Lock()
-					k.kafkaConsGroup[targetSinkLabel] = kafkaConsumerGroup
+					k.kafkaConsGroup[connID] = kafkaConsumerGroup
+					k.kafkaConsGroupInfo[connID] = &consGroupInfo{
+						Name:      consumerCfg.Name,
+						Namespace: consumerCfg.Namespace,
+					}
 					k.mKafkaConsGroup.Unlock()
 					continue
 				}
@@ -177,9 +191,14 @@ func (k *KafkaConsumerManager) GetActiveConsumers(ctx context.Context) []Consume
 	defer k.mKafkaConsGroup.RUnlock()
 
 	consumers := make([]Consumer, 0)
-	for consumerLabel := range k.kafkaConsGroup {
+	for consumerID := range k.kafkaConsGroup {
+		info, ok := k.kafkaConsGroupInfo[consumerID]
+		if !ok {
+			continue
+		}
 		consumers = append(consumers, Consumer{
-			Label: consumerLabel,
+			Label:     info.Name,
+			Namespace: info.Namespace,
 		})
 	}
 
@@ -195,13 +214,13 @@ func (k *KafkaConsumerManager) Close() error {
 	defer k.mKafkaConsGroup.Unlock()
 
 	var errCum error
-	for consGroupName, consGroup := range k.kafkaConsGroup {
+	for connID, consGroup := range k.kafkaConsGroup {
 		if consGroup == nil {
 			continue
 		}
 		_err := consGroup.Close()
 		if _err != nil {
-			errCum = multierror.Append(errCum, fmt.Errorf("consumer group '%s': %w", consGroupName, _err))
+			errCum = multierror.Append(errCum, fmt.Errorf("consumer group '%s': %w", connID, _err))
 		}
 	}
 

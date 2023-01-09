@@ -1,16 +1,14 @@
 package resourcesvc
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
 	"github.com/yusufsyaifudin/khook/storage"
-	"io"
 	"time"
 )
 
@@ -35,29 +33,147 @@ func NewResourceService(cfg ConsumerManagerConfig) (*ConsumerManager, error) {
 	return mgr, nil
 }
 
-func (c *ConsumerManager) AddKafkaConfig(ctx context.Context, in InAddKafkaConfig) (out OutAddKafkaConfig, err error) {
-	cfg := storage.NewKafkaConnection()
-	cfg.Metadata.Name = in.Label
-	cfg.Spec.Brokers = in.Address
+func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (out OutAddResource, err error) {
 
-	outPersist, err := c.Config.KafkaConnStore.PersistKafkaConfig(ctx, storage.InputPersistKafkaConfig{
-		KafkaConfig: cfg,
-		ResourceState: storage.ResourceState{
-			Rev:       0,
-			Status:    storage.Start,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	})
-
+	specBytes, err := json.Marshal(in.Resource.Spec)
 	if err != nil {
+		err = fmt.Errorf("cannot marshal spec to json: %w", err)
+		return OutAddResource{}, err
+	}
+
+	var outResource KhookResource
+	switch in.Resource.Kind {
+	case storage.KindKafkaConnection:
+		cfg := storage.NewKafkaConnectionConfig()
+		cfg.Metadata.Name = in.Resource.Name
+
+		if in.Resource.Namespace != "" {
+			cfg.Metadata.Namespace = in.Resource.Namespace
+		}
+
+		var spec storage.KafkaConfigSpec
+		err = json.Unmarshal(specBytes, &spec)
+		if err != nil {
+			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
+			return
+		}
+
+		cfg.Spec = spec
+
+		// get existing row to increment the revision counter
+		var existingKafkaCfg storage.OutGetKafkaConnConfig
+		existingKafkaCfg, err = c.Config.KafkaConnStore.GetKafkaConnConfig(ctx, storage.InGetKafkaConnConfig{
+			Namespace: cfg.Namespace,
+			Name:      cfg.Name,
+		})
+		if err != nil && errors.Is(err, sql.ErrNoRows) {
+			err = fmt.Errorf("cannot get kafka connection config: %w", err)
+			return
+		}
+
+		state := existingKafkaCfg.ResourceState
+		state.Rev += 1
+		state.UpdatedAt = time.Now()
+
+		var outPersist storage.OutPersistKafkaConnConfig
+		outPersist, err = c.Config.KafkaConnStore.PersistKafkaConnConfig(ctx, storage.InPersistKafkaConnConfig{
+			KafkaConfig:   cfg,
+			ResourceState: state,
+		})
+		if err != nil {
+			err = fmt.Errorf("cannot store kafka connection config: %w", err)
+			return
+		}
+
+		outResource = KhookResource{
+			Type:     outPersist.KafkaConfig.Type,
+			Metadata: outPersist.KafkaConfig.Metadata,
+			Spec:     outPersist.KafkaConfig.Spec,
+		}
+
+	case storage.KindKafkaConsumer:
+		cfg := storage.NewKafkaConsumerConfig()
+		cfg.Metadata.Name = in.Resource.Name
+
+		if in.Resource.Namespace != "" {
+			cfg.Metadata.Namespace = in.Resource.Namespace
+		}
+
+		var spec storage.ConsumerConfigSpec
+		err = json.Unmarshal(specBytes, &spec)
+		if err != nil {
+			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
+			return
+		}
+
+		cfg.Spec = spec
+
+		// get existing row to increment the revision counter
+		var existingKafkaConsumer storage.OutGetKafkaConsumer
+		existingKafkaConsumer, err = c.Config.KafkaConsumerStore.GetKafkaConsumer(ctx, storage.InGetKafkaConsumer{
+			Namespace: cfg.Namespace,
+			Name:      cfg.Name,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+
+		if err != nil {
+			err = fmt.Errorf("cannot get kafka consumer config: %w", err)
+			return
+		}
+
+		state := existingKafkaConsumer.ResourceState
+		state.Rev += 1
+		state.UpdatedAt = time.Now()
+
+		var outPersist storage.OutPersistKafkaConsumer
+		outPersist, err = c.Config.KafkaConsumerStore.PersistKafkaConsumer(ctx, storage.InputPersistKafkaConsumer{
+			KafkaConsumerConfig: cfg,
+			ResourceState:       state,
+		})
+		if err != nil {
+			err = fmt.Errorf("cannot store kafka consumer config: %w", err)
+			return
+		}
+
+		outResource = KhookResource{
+			Type:     outPersist.KafkaConsumerConfig.Type,
+			Metadata: outPersist.KafkaConsumerConfig.Metadata,
+			Spec:     outPersist.KafkaConsumerConfig.Spec,
+		}
+	default:
+		err = fmt.Errorf("cannot store resource kind=%s", in.Resource.Kind)
 		return
 	}
 
-	out = OutAddKafkaConfig{
-		KafkaConfig: outPersist.KafkaConfig,
+	out = OutAddResource{
+		Resource: outResource,
 	}
 
+	return
+}
+
+func (c *ConsumerManager) GetConsumers(ctx context.Context) (out OutGetWebhooks, err error) {
+	rows, err := c.Config.KafkaConsumerStore.GetKafkaConsumers(ctx)
+	if err != nil {
+		err = fmt.Errorf("cannot get kafka consumers: %w", err)
+		return
+	}
+
+	consumers := make([]storage.KafkaConsumerConfig, 0)
+	for rows.Next() {
+		row, _, err := rows.KafkaConsumerConfig()
+		if err != nil {
+			continue
+		}
+
+		consumers = append(consumers, row)
+	}
+
+	out = OutGetWebhooks{
+		Consumers: consumers,
+	}
 	return
 }
 
@@ -72,103 +188,25 @@ func (c *ConsumerManager) GetActiveKafkaConfigs(ctx context.Context) (out OutGet
 	return
 }
 
-// AddWebhook add webhook configuration, and later will be managed by manageConsumers to run actual consumer.
-func (c *ConsumerManager) AddWebhook(ctx context.Context, in InputAddWebhook) (out OutAddWebhook, err error) {
-	b, err := json.Marshal(in.Webhook.SinkTarget)
-	if err != nil {
-		return
-	}
-
-	h := sha256.New()
-	_, err = io.Copy(h, bytes.NewReader(b))
-	if err != nil {
-		err = fmt.Errorf("cannot copy to calculate sink target checksum: %w", err)
-		return
-	}
-
-	checkSum := hex.EncodeToString(h.Sum(nil))
-
-	outAddWebhook, err := c.Config.KafkaConsumerStore.PersistKafkaConsumer(ctx, storage.InputPersistKafkaConsumer{
-		ConsumerConfigRow: storage.ConsumerConfigRow{
-			Label:              in.Webhook.Label,
-			SinkTargetChecksum: checkSum,
-			SinkTarget:         in.Webhook.SinkTarget,
-			Metadata:           map[string]string{},
-		},
-	})
-	if err != nil {
-		return
-	}
-
-	out = OutAddWebhook{
-		Webhook: outAddWebhook.ConsumerConfigRow.SinkTarget,
-	}
-
-	return
-}
-
-// GetWebhooks get all registered webhook in the database.
-func (c *ConsumerManager) GetWebhooks(ctx context.Context) (out OutGetWebhooks, err error) {
-	outGetWebhook, err := c.Config.KafkaConsumerStore.GetKafkaConsumers(ctx)
-	if err != nil {
-		return
-	}
-
-	webhooks := make([]storage.SinkTarget, 0)
-	for outGetWebhook.Next() {
-		webhook, _err := outGetWebhook.ConsumerConfigRow()
-		if _err != nil {
-			err = fmt.Errorf("iterating webhook row: %s", _err)
-			return
-		}
-
-		webhooks = append(webhooks, webhook.SinkTarget)
-	}
-
-	out = OutGetWebhooks{
-		Webhooks: webhooks,
-	}
-
-	return
-}
-
 // GetActiveConsumers get active webhook that running in this program.
 func (c *ConsumerManager) GetActiveConsumers(ctx context.Context) (out OutGetActiveConsumers, err error) {
 	consumers := c.Config.KafkaConsumerManager.GetActiveConsumers(ctx)
 
-	activeConsumers := make([]storage.SinkTarget, 0)
+	activeConsumers := make([]storage.KafkaConsumerConfig, 0)
 	for _, consumer := range consumers {
-		sinkTarget, err := c.Config.KafkaConsumerStore.GetSinkTargetByLabel(ctx, consumer.Label)
+		sinkTarget, err := c.Config.KafkaConsumerStore.GetKafkaConsumer(ctx, storage.InGetKafkaConsumer{
+			Namespace: consumer.Namespace,
+			Name:      consumer.Label,
+		})
 		if err != nil {
 			continue
 		}
 
-		activeConsumers = append(activeConsumers, sinkTarget)
+		activeConsumers = append(activeConsumers, sinkTarget.KafkaConsumerConfig)
 	}
 
 	out = OutGetActiveConsumers{
-		ActiveConsumers: activeConsumers,
+		Consumers: activeConsumers,
 	}
 	return
-}
-
-// PauseWebhook pause existing webhook
-func (c *ConsumerManager) PauseWebhook(ctx context.Context, in InPauseWebhook) (out OutPauseWebhook, err error) {
-	// TODO: update database with state pause
-
-	out = OutPauseWebhook{
-		Paused: true,
-	}
-	return
-}
-
-// ResumeWebhook resume paused webhook
-func (c *ConsumerManager) ResumeWebhook(ctx context.Context, in InResumeWebhook) (out OutResumeWebhook, err error) {
-
-	return
-}
-
-// GetPausedWebhooks get paused webhook that running in this program.
-func (c *ConsumerManager) GetPausedWebhooks(ctx context.Context) (out OutGetPausedWebhooks, err error) {
-	return OutGetPausedWebhooks{}, err
 }

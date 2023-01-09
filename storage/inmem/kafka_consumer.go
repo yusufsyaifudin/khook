@@ -2,24 +2,25 @@ package inmem
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
-	"io"
-	"os"
-	"sync"
-
 	"github.com/yusufsyaifudin/khook/storage"
+	"io"
+	"sync"
 )
 
 type KafkaConsumerStore struct {
-	store sync.Map
+	store      sync.Map
+	storeState sync.Map
 }
 
 var _ storage.KafkaConsumerStore = (*KafkaConsumerStore)(nil)
 
 func NewKafkaConsumerStore() *KafkaConsumerStore {
 	return &KafkaConsumerStore{
-		store: sync.Map{},
+		store:      sync.Map{},
+		storeState: sync.Map{},
 	}
 }
 
@@ -30,42 +31,67 @@ func (w *KafkaConsumerStore) PersistKafkaConsumer(ctx context.Context, in storag
 		return
 	}
 
-	actual, _ := w.store.LoadOrStore(in.ConsumerConfigRow.Label, in.ConsumerConfigRow)
+	id := fmt.Sprintf("%s:%s", in.KafkaConsumerConfig.Namespace, in.KafkaConsumerConfig.Name)
+	actual, _ := w.store.LoadOrStore(id, in.KafkaConsumerConfig)
+	state, _ := w.storeState.LoadOrStore(id, in.ResourceState)
 
 	out = storage.OutPersistKafkaConsumer{
-		ConsumerConfigRow: actual.(storage.ConsumerConfigRow),
+		KafkaConsumerConfig: actual.(storage.KafkaConsumerConfig),
+		ResourceState:       state.(storage.ResourceState),
+	}
+
+	return
+}
+
+func (w *KafkaConsumerStore) GetKafkaConsumer(ctx context.Context, in storage.InGetKafkaConsumer) (out storage.OutGetKafkaConsumer, err error) {
+	id := fmt.Sprintf("%s:%s", in.Namespace, in.Name)
+
+	consumer, exist := w.store.Load(id)
+	if !exist {
+		err = sql.ErrNoRows
+		return
+	}
+
+	state, exist := w.storeState.Load(id)
+	if !exist {
+		err = sql.ErrNoRows
+		return
+	}
+
+	out = storage.OutGetKafkaConsumer{
+		KafkaConsumerConfig: consumer.(storage.KafkaConsumerConfig),
+		ResourceState:       state.(storage.ResourceState),
 	}
 
 	return
 }
 
 func (w *KafkaConsumerStore) GetKafkaConsumers(ctx context.Context) (out storage.KafkaConsumerRows, err error) {
-	webhooks := make([]storage.ConsumerConfigRow, 0)
+	consumers := make([]storage.KafkaConsumerConfig, 0)
+	states := make(map[string]storage.ResourceState)
 
 	w.store.Range(func(key, value any) bool {
-		webhooks = append(webhooks, value.(storage.ConsumerConfigRow))
+		consumers = append(consumers, value.(storage.KafkaConsumerConfig))
+		return true
+	})
+
+	w.storeState.Range(func(key, value any) bool {
+		states[key.(string)] = value.(storage.ResourceState)
 		return true
 	})
 
 	out = &WebhookRows{
-		rows: webhooks,
+		rows:   consumers,
+		states: states,
 	}
 	return
 }
 
-func (w *KafkaConsumerStore) GetSinkTargetByLabel(ctx context.Context, label string) (storage.SinkTarget, error) {
-	webhook, exist := w.store.Load(label)
-	if !exist {
-		return storage.SinkTarget{}, os.ErrNotExist
-	}
-
-	return webhook.(storage.SinkTarget), nil
-}
-
 type WebhookRows struct {
 	lock    sync.Mutex
-	rows    []storage.ConsumerConfigRow
-	currRow *storage.ConsumerConfigRow
+	rows    []storage.KafkaConsumerConfig
+	states  map[string]storage.ResourceState
+	currRow *storage.KafkaConsumerConfig
 }
 
 var _ storage.KafkaConsumerRows = (*WebhookRows)(nil)
@@ -82,12 +108,13 @@ func (w *WebhookRows) Next() bool {
 	return false
 }
 
-func (w *WebhookRows) ConsumerConfigRow() (storage.ConsumerConfigRow, error) {
+func (w *WebhookRows) KafkaConsumerConfig() (storage.KafkaConsumerConfig, storage.ResourceState, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currRow == nil {
-		return storage.ConsumerConfigRow{}, io.ErrUnexpectedEOF
+		return storage.KafkaConsumerConfig{}, storage.ResourceState{}, io.ErrUnexpectedEOF
 	}
 
-	return *w.currRow, nil
+	id := fmt.Sprintf("%s:%s", w.currRow.Namespace, w.currRow.Name)
+	return *w.currRow, w.states[id], nil
 }
