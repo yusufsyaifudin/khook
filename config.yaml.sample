@@ -1,0 +1,7 @@
+http:
+  port: 3333
+
+storage:
+  kafka_conn_store:
+    postgres:
+      dsn: "user=postgres password=postgres host=localhost port=5433 dbname=khook sslmode=disable"
