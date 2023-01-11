@@ -11,8 +11,7 @@ import (
 )
 
 type KafkaConnStore struct {
-	store      sync.Map
-	storeState sync.Map
+	store sync.Map
 }
 
 var _ storage.KafkaConnStore = (*KafkaConnStore)(nil)
@@ -32,32 +31,23 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 
 	id := fmt.Sprintf("%s:%s", in.KafkaConfig.Namespace, in.KafkaConfig.Name)
 	kafkaCfg, _ := k.store.LoadOrStore(id, in.KafkaConfig)
-	state, _ := k.storeState.LoadOrStore(id, in.ResourceState)
 
 	out = storage.OutPersistKafkaConnConfig{
-		KafkaConfig:   kafkaCfg.(storage.KafkaConnectionConfig),
-		ResourceState: state.(storage.ResourceState),
+		KafkaConfig: kafkaCfg.(storage.KafkaConnectionConfig),
 	}
 	return
 }
 
 func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.KafkaConnConfigRows, err error) {
 	kafkaConfigs := make([]storage.KafkaConnectionConfig, 0)
-	states := make(map[string]storage.ResourceState)
 
 	k.store.Range(func(key, value any) bool {
 		kafkaConfigs = append(kafkaConfigs, value.(storage.KafkaConnectionConfig))
 		return true
 	})
 
-	k.storeState.Range(func(key, value any) bool {
-		states[key.(string)] = value.(storage.ResourceState)
-		return true
-	})
-
 	rows = &KafkaConfigRows{
 		kafkaConfigs: kafkaConfigs,
-		states:       states,
 	}
 	return
 }
@@ -71,24 +61,21 @@ func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGe
 		return
 	}
 
-	state, exist := k.storeState.Load(id)
-	if !exist {
-		err = os.ErrNotExist
-		return
-	}
-
 	out = storage.OutGetKafkaConnConfig{
-		KafkaConfig:   cfg.(storage.KafkaConnectionConfig),
-		ResourceState: state.(storage.ResourceState),
+		KafkaConfig: cfg.(storage.KafkaConnectionConfig),
 	}
 
 	return
 }
 
+func (k *KafkaConnStore) WatchKafkaConnConfig(ctx context.Context, out chan storage.OutWatchKafkaConnConfig) {
+	//TODO implement me
+	panic("implement me")
+}
+
 type KafkaConfigRows struct {
 	lock            sync.Mutex
 	kafkaConfigs    []storage.KafkaConnectionConfig
-	states          map[string]storage.ResourceState
 	currKafkaConfig *storage.KafkaConnectionConfig
 }
 
@@ -106,13 +93,12 @@ func (w *KafkaConfigRows) Next() bool {
 	return false
 }
 
-func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, storage.ResourceState, error) {
+func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currKafkaConfig == nil {
-		return storage.KafkaConnectionConfig{}, storage.ResourceState{}, io.ErrUnexpectedEOF
+		return storage.KafkaConnectionConfig{}, io.ErrUnexpectedEOF
 	}
 
-	id := fmt.Sprintf("%s:%s", w.currKafkaConfig.Namespace, w.currKafkaConfig.Name)
-	return *w.currKafkaConfig, w.states[id], nil
+	return *w.currKafkaConfig, nil
 }

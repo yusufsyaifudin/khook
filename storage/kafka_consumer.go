@@ -10,12 +10,10 @@ type KafkaConsumerStore interface {
 
 type InputPersistKafkaConsumer struct {
 	KafkaConsumerConfig KafkaConsumerConfig `validate:"required"`
-	ResourceState       ResourceState       `validate:"required"`
 }
 
 type OutPersistKafkaConsumer struct {
 	KafkaConsumerConfig KafkaConsumerConfig
-	ResourceState       ResourceState
 }
 
 type InGetKafkaConsumer struct {
@@ -25,11 +23,10 @@ type InGetKafkaConsumer struct {
 
 type OutGetKafkaConsumer struct {
 	KafkaConsumerConfig KafkaConsumerConfig
-	ResourceState       ResourceState
 }
 
 // KafkaConsumerRows contains list of KafkaConsumerConfig
 type KafkaConsumerRows interface {
 	Next() bool
-	KafkaConsumerConfig() (w KafkaConsumerConfig, state ResourceState, err error)
+	KafkaConsumerConfig() (w KafkaConsumerConfig, err error)
 }

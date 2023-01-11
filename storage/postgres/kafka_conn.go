@@ -17,8 +17,11 @@ import (
 
 const (
 	SqlPersist = `
-INSERT INTO kafka_configs (id, name, namespace, rev, spec, status, created_at, updated_at) 
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+INSERT INTO kafka_configs (id, name, namespace, spec, created_at, updated_at) 
+VALUES ($1, $2, $4, $6, $7, $8) 
+ON CONFLICT kafka_configs(name, namespace) DO UPDATE SET 
+    kafka_configs.spec = EXCLUDED.spec,
+    kafka_configs.updated_at = EXCLUDED.updated_at,
 RETURNING *;
 `
 
@@ -38,9 +41,6 @@ type KafkaConfigTable struct {
 
 	// Spec store all configuration copy of the Object
 	Spec storage.KafkaConnectionConfig `db:"spec"`
-
-	// These field is come from storage.ResourceState
-	Status storage.Status `db:"status"`
 
 	// Timestamp using integer as unix microsecond in UTC
 	CreatedAt int64 `db:"created_at"`
@@ -133,13 +133,11 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 		return
 	}
 
-	resourceState := in.ResourceState
-
+	now := time.Now()
 	var kafkaConfigOut KafkaConfigTable
 	err = sqlx.GetContext(ctx, k.db, &kafkaConfigOut, SqlPersist,
-		id, in.KafkaConfig.Name, in.KafkaConfig.Namespace, in.ResourceState.Rev, kafkaCfg,
-		resourceState.Status,
-		resourceState.CreatedAt.UnixMicro(), resourceState.UpdatedAt.UnixMicro(),
+		id, in.KafkaConfig.Name, in.KafkaConfig.Namespace, kafkaCfg,
+		now.UnixMicro(), now.UnixMicro(),
 	)
 	if err != nil {
 		err = fmt.Errorf("cannot exec query: %s", err)
@@ -148,12 +146,6 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 
 	out = storage.OutPersistKafkaConnConfig{
 		KafkaConfig: kafkaConfigOut.Spec,
-		ResourceState: storage.ResourceState{
-			Rev:       kafkaConfigOut.Rev,
-			Status:    kafkaConfigOut.Status,
-			CreatedAt: time.UnixMicro(kafkaConfigOut.CreatedAt),
-			UpdatedAt: time.UnixMicro(kafkaConfigOut.UpdatedAt),
-		},
 	}
 	return
 }
@@ -169,12 +161,6 @@ func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGe
 
 	out = storage.OutGetKafkaConnConfig{
 		KafkaConfig: row.Spec,
-		ResourceState: storage.ResourceState{
-			Rev:       row.Rev,
-			Status:    row.Status,
-			CreatedAt: time.UnixMicro(row.CreatedAt),
-			UpdatedAt: time.UnixMicro(row.UpdatedAt),
-		},
 	}
 	return
 }
@@ -203,6 +189,10 @@ func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.
 	}
 
 	return
+}
+
+func (k *KafkaConnStore) WatchKafkaConnConfig(ctx context.Context, out chan storage.OutWatchKafkaConnConfig) {
+
 }
 
 type KafkaConfigRows struct {
@@ -270,18 +260,13 @@ func (k *KafkaConfigRows) Next() bool {
 	return true
 }
 
-func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, storage.ResourceState, error) {
+func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, error) {
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 
 	if k.currRowsErr != nil {
-		return storage.KafkaConnectionConfig{}, storage.ResourceState{}, k.currRowsErr
+		return storage.KafkaConnectionConfig{}, k.currRowsErr
 	}
 
-	return k.currRow.Spec, storage.ResourceState{
-		Rev:       k.currRow.Rev,
-		Status:    k.currRow.Status,
-		CreatedAt: time.UnixMicro(k.currRow.CreatedAt),
-		UpdatedAt: time.UnixMicro(k.currRow.UpdatedAt),
-	}, nil
+	return k.currRow.Spec, nil
 }

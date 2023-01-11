@@ -2,14 +2,11 @@ package resourcesvc
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
 	"github.com/yusufsyaifudin/khook/storage"
-	"time"
 )
 
 type ConsumerManagerConfig struct {
@@ -60,25 +57,9 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 
 		cfg.Spec = spec
 
-		// get existing row to increment the revision counter
-		var existingKafkaCfg storage.OutGetKafkaConnConfig
-		existingKafkaCfg, err = c.Config.KafkaConnStore.GetKafkaConnConfig(ctx, storage.InGetKafkaConnConfig{
-			Namespace: cfg.Namespace,
-			Name:      cfg.Name,
-		})
-		if err != nil && errors.Is(err, sql.ErrNoRows) {
-			err = fmt.Errorf("cannot get kafka connection config: %w", err)
-			return
-		}
-
-		state := existingKafkaCfg.ResourceState
-		state.Rev += 1
-		state.UpdatedAt = time.Now()
-
 		var outPersist storage.OutPersistKafkaConnConfig
 		outPersist, err = c.Config.KafkaConnStore.PersistKafkaConnConfig(ctx, storage.InPersistKafkaConnConfig{
-			KafkaConfig:   cfg,
-			ResourceState: state,
+			KafkaConfig: cfg,
 		})
 		if err != nil {
 			err = fmt.Errorf("cannot store kafka connection config: %w", err)
@@ -108,29 +89,9 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 
 		cfg.Spec = spec
 
-		// get existing row to increment the revision counter
-		var existingKafkaConsumer storage.OutGetKafkaConsumer
-		existingKafkaConsumer, err = c.Config.KafkaConsumerStore.GetKafkaConsumer(ctx, storage.InGetKafkaConsumer{
-			Namespace: cfg.Namespace,
-			Name:      cfg.Name,
-		})
-		if errors.Is(err, sql.ErrNoRows) {
-			err = nil
-		}
-
-		if err != nil {
-			err = fmt.Errorf("cannot get kafka consumer config: %w", err)
-			return
-		}
-
-		state := existingKafkaConsumer.ResourceState
-		state.Rev += 1
-		state.UpdatedAt = time.Now()
-
 		var outPersist storage.OutPersistKafkaConsumer
 		outPersist, err = c.Config.KafkaConsumerStore.PersistKafkaConsumer(ctx, storage.InputPersistKafkaConsumer{
 			KafkaConsumerConfig: cfg,
-			ResourceState:       state,
 		})
 		if err != nil {
 			err = fmt.Errorf("cannot store kafka consumer config: %w", err)
@@ -163,7 +124,7 @@ func (c *ConsumerManager) GetConsumers(ctx context.Context) (out OutGetWebhooks,
 
 	consumers := make([]storage.KafkaConsumerConfig, 0)
 	for rows.Next() {
-		row, _, err := rows.KafkaConsumerConfig()
+		row, err := rows.KafkaConsumerConfig()
 		if err != nil {
 			continue
 		}

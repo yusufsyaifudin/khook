@@ -82,7 +82,7 @@ func (k *KafkaConsumerManager) connectKafkaToSink() {
 			}
 
 			for kafkaConsumers.Next() {
-				consumerCfg, _, _err := kafkaConsumers.KafkaConsumerConfig()
+				consumerCfg, _err := kafkaConsumers.KafkaConsumerConfig()
 				if _err != nil {
 					log.Printf("getting sink target row error: %s\n", _err)
 					continue

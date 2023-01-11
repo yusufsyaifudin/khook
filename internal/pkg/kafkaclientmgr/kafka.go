@@ -75,7 +75,7 @@ func (k *KafkaClientManager) getConnIDScoped(ns, name string) string {
 }
 
 // addOrRefreshConnection Add new connection, but before that, make sure the connection is not duplicate.
-func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnectionConfig, resourceState storage.ResourceState) {
+func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnectionConfig) {
 	connID := k.getConnID(kafkaCfg)
 
 	k.kafkaConnLock.RLock() // lock read
@@ -214,7 +214,7 @@ func (k *KafkaClientManager) updateConnections() {
 	wg := &sync.WaitGroup{}
 
 	for outKafkaCfg.Next() {
-		kafkaCfg, state, _err := outKafkaCfg.KafkaConnection()
+		kafkaCfg, _err := outKafkaCfg.KafkaConnection()
 		if _err != nil {
 			log.Printf("getting kafka config row error: %s\n", _err)
 			continue
@@ -238,14 +238,14 @@ func (k *KafkaClientManager) updateConnections() {
 		// add or refresh connection if not exist using go routine
 		// so, we can have multiple try to open connection
 		wg.Add(1)
-		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnectionConfig, _state storage.ResourceState) {
+		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnectionConfig) {
 			defer func() {
 				_wg.Done()
 				k.sem.Release(1)
 			}()
 
-			k.addOrRefreshConnection(_kafkaCfg, _state)
-		}(wg, kafkaCfg, state)
+			k.addOrRefreshConnection(_kafkaCfg)
+		}(wg, kafkaCfg)
 	}
 
 	wg.Wait()

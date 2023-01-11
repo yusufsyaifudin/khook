@@ -7,20 +7,26 @@ import (
 	"os"
 )
 
+type ChangeType string
+
+const (
+	Put    ChangeType = "Put"
+	Delete ChangeType = "Put"
+)
+
 type KafkaConnStore interface {
 	PersistKafkaConnConfig(ctx context.Context, in InPersistKafkaConnConfig) (out OutPersistKafkaConnConfig, err error)
 	GetKafkaConnConfig(ctx context.Context, in InGetKafkaConnConfig) (out OutGetKafkaConnConfig, err error)
 	GetKafkaConnConfigs(ctx context.Context) (rows KafkaConnConfigRows, err error)
+	WatchKafkaConnConfig(ctx context.Context, out chan OutWatchKafkaConnConfig)
 }
 
 type InPersistKafkaConnConfig struct {
-	KafkaConfig   KafkaConnectionConfig `validate:"required"`
-	ResourceState ResourceState         `validate:"required"`
+	KafkaConfig KafkaConnectionConfig `validate:"required"`
 }
 
 type OutPersistKafkaConnConfig struct {
-	KafkaConfig   KafkaConnectionConfig
-	ResourceState ResourceState
+	KafkaConfig KafkaConnectionConfig
 }
 
 type InGetKafkaConnConfig struct {
@@ -29,13 +35,17 @@ type InGetKafkaConnConfig struct {
 }
 
 type OutGetKafkaConnConfig struct {
-	KafkaConfig   KafkaConnectionConfig
-	ResourceState ResourceState
+	KafkaConfig KafkaConnectionConfig
+}
+
+type OutWatchKafkaConnConfig struct {
+	ChangeType  ChangeType
+	KafkaConfig KafkaConnectionConfig
 }
 
 type KafkaConnConfigRows interface {
 	Next() bool
-	KafkaConnection() (cfg KafkaConnectionConfig, state ResourceState, err error)
+	KafkaConnection() (cfg KafkaConnectionConfig, err error)
 }
 
 type KafkaConfigNoRows struct{}
@@ -43,8 +53,8 @@ type KafkaConfigNoRows struct{}
 var _ KafkaConnConfigRows = (*KafkaConfigNoRows)(nil)
 
 func (n *KafkaConfigNoRows) Next() bool { return false }
-func (n *KafkaConfigNoRows) KafkaConnection() (KafkaConnectionConfig, ResourceState, error) {
-	return KafkaConnectionConfig{}, ResourceState{}, os.ErrNotExist
+func (n *KafkaConfigNoRows) KafkaConnection() (KafkaConnectionConfig, error) {
+	return KafkaConnectionConfig{}, os.ErrNotExist
 }
 
 type KafkaConfigSpec struct {

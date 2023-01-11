@@ -19,6 +19,9 @@ type ServerConfig struct {
 		KafkaConnStore struct {
 			InMemory *struct{} `yaml:"in_memory"`
 			Postgres *Postgres `yaml:"postgres"`
+			Etcd     *struct {
+				Endpoints []string `yaml:"endpoints"`
+			} `yaml:"etcd"`
 		} `yaml:"kafka_conn_store"`
 	} `yaml:"storage"`
 }

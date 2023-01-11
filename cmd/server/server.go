@@ -9,6 +9,7 @@ import (
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
 	"github.com/yusufsyaifudin/khook/internal/svc/resourcesvc"
 	"github.com/yusufsyaifudin/khook/storage"
+	"github.com/yusufsyaifudin/khook/storage/etcd"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
 	"github.com/yusufsyaifudin/khook/storage/postgres"
 	"github.com/yusufsyaifudin/khook/transport"
@@ -48,6 +49,16 @@ func (s *Server) Run() error {
 
 	var kafkaConnStore storage.KafkaConnStore = inmem.NewKafkaConnStore()
 	var kafkaConsumerStore storage.KafkaConsumerStore = inmem.NewKafkaConsumerStore()
+
+	if cfg.Storage.KafkaConnStore.Etcd != nil {
+		kafkaConnStore, err = etcd.NewKafkaConnStore(etcd.WithEndpoints(cfg.Storage.KafkaConnStore.Etcd.Endpoints))
+		if err != nil {
+			err = fmt.Errorf("cannot use etcd for kafka conn store: %w", err)
+			return err
+		}
+
+		log.Println("kafka connection store using etcd")
+	}
 
 	if cfg.Storage.KafkaConnStore.Postgres != nil {
 		sqlDB, err := cfg.Storage.KafkaConnStore.Postgres.OpenConn()
