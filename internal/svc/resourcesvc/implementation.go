@@ -7,6 +7,7 @@ import (
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
 	"github.com/yusufsyaifudin/khook/pkg/types"
+	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"github.com/yusufsyaifudin/khook/storage"
 )
 
@@ -32,6 +33,11 @@ func NewResourceService(cfg ConsumerManagerConfig) (*ConsumerManager, error) {
 }
 
 func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (out OutAddResource, err error) {
+	err = validator.Validate(in)
+	if err != nil {
+		err = fmt.Errorf("cannot validate resource: %w", err)
+		return
+	}
 
 	specBytes, err := json.Marshal(in.Resource.Spec)
 	if err != nil {
@@ -40,7 +46,8 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 	}
 
 	var outResource KhookResource
-	switch in.Resource.Kind {
+	kind := in.Resource.Kind
+	switch kind {
 	case types.KindKafkaBroker:
 		cfg := types.NewKafkaConnectionConfig()
 		cfg.Metadata.Name = in.Resource.Name
@@ -52,7 +59,13 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 		var spec types.KafkaBrokerSpec
 		err = json.Unmarshal(specBytes, &spec)
 		if err != nil {
-			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
+			err = fmt.Errorf("invalid kafka broker config spec: %w", err)
+			return
+		}
+
+		err = validator.Validate(spec)
+		if err != nil {
+			err = fmt.Errorf("cannot validate resource type %s: %w", kind, err)
 			return
 		}
 
@@ -63,7 +76,7 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 			Resource: cfg,
 		})
 		if err != nil {
-			err = fmt.Errorf("cannot store kafka connection config: %w", err)
+			err = fmt.Errorf("cannot store kafka broker config: %w", err)
 			return
 		}
 
@@ -84,7 +97,13 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 		var spec types.ConsumerConfigSpec
 		err = json.Unmarshal(specBytes, &spec)
 		if err != nil {
-			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
+			err = fmt.Errorf("invalid kafka broker config spec: %w", err)
+			return
+		}
+
+		err = validator.Validate(spec)
+		if err != nil {
+			err = fmt.Errorf("cannot validate resource type %s: %w", kind, err)
 			return
 		}
 
@@ -105,7 +124,7 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 			Spec:     outPersist.Resource.Spec,
 		}
 	default:
-		err = fmt.Errorf("cannot store resource kind=%s", in.Resource.Kind)
+		err = fmt.Errorf("cannot store resource kind=%s", kind)
 		return
 	}
 

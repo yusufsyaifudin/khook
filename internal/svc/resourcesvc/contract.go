@@ -23,7 +23,7 @@ type KhookResource struct {
 
 // InAddResource is similar like storage.KafkaBrokerConfig but without ID
 type InAddResource struct {
-	Resource KhookResource `json:"resource"`
+	Resource KhookResource `json:"resource" validate:"required"`
 }
 
 type OutAddResource struct {

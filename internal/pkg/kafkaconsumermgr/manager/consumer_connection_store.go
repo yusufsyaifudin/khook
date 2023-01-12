@@ -9,6 +9,7 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/hashicorp/go-multierror"
 	"github.com/yusufsyaifudin/khook/pkg/types"
+	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"io"
 	"log"
 	"sort"
@@ -16,9 +17,9 @@ import (
 )
 
 type ConsumerGroupInfo struct {
-	Name              string
-	Namespace         string
-	ConsumerGroupConn sarama.ConsumerGroup
+	Name              string               `validate:"required,resource_name"`
+	Namespace         string               `validate:"required,resource_name"`
+	ConsumerGroupConn sarama.ConsumerGroup `validate:"required"`
 }
 
 type ConnManager struct {
@@ -46,6 +47,12 @@ func NewConnManager() *ConnManager {
 }
 
 func (c *ConnManager) Add(conn *ConsumerGroupInfo, consumerCfg types.KafkaConsumerConfig) error {
+	err := validator.Validate(conn)
+	if err != nil {
+		err = fmt.Errorf("cannot validate consumer group info: %w", err)
+		return err
+	}
+
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -83,7 +90,9 @@ func (c *ConnManager) Delete(ns, name string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	delete(c.activeConsumer, c.getConnIDByNs(ns, name))
+	connID := c.getConnIDByNs(ns, name)
+	delete(c.activeConsumer, connID)
+	delete(c.pausedConsumer, connID)
 	return nil
 }
 
@@ -155,6 +164,7 @@ func (c *ConnManager) getConnIDByNs(ns, name string) string {
 func (c *ConnManager) calculateChecksum(consumerCfg types.KafkaConsumerConfig) (string, error) {
 	specBytes, err := json.Marshal(consumerCfg.Spec)
 	if err != nil {
+		err = fmt.Errorf("cannot marshal consumer config spec: %w", err)
 		return "", err
 	}
 

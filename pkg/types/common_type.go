@@ -13,7 +13,7 @@ type Type struct {
 }
 
 type Metadata struct {
-	Name      string            `json:"name,omitempty" validate:"required,max=65"`
-	Namespace string            `json:"namespace,omitempty" validate:"required,max=65"`
+	Name      string            `json:"name,omitempty" validate:"required,resource_name,max=65"`
+	Namespace string            `json:"namespace,omitempty" validate:"required,resource_name,max=65"`
 	Labels    map[string]string `json:"labels,omitempty"`
 }
