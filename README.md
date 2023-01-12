@@ -14,9 +14,10 @@ This project is still in POC status. If you want to contribute, then nice! THANK
 By joining force from the two world, we can make our event stream more consistent, accessible, and portable 
 (where we get from CloudEvents<sup>1</sup>), and at the same time make our stream more performant and reliable (by using Kafka<sup>2</sup>).
 
-<sup>1</sup> 
+<sup>1</sup> The goal of CloudEvents specification is to agree on how we describing events so the event will be consistent. 
+Also, we can move our client from one server to another server without the fear of compatibility.
 
-<sup>2</sup>
+<sup>2</sup> Kafka is proven to have strong performance under big load.
 
 ## Other alternatives
 
@@ -33,6 +34,17 @@ By joining force from the two world, we can make our event stream more consisten
   `khook` in the other hand always **looping** the configuration from Database as source of truth, so every Deployment of `khook`
   will always **eventually** has the same stream as long as it connect to the same database.
   In future design, we may use `etcd` watcher like Kubernetes so every changes will be listened by every `khook` deployment, but for POC looping database is enough.
+
+
+Comparison Table
+
+| Feature              | Khook                                                                                                                                                                             | KNative                                                                                                                                                                                                                                          | Benthos                                                                                                                       |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| Useful when          | Your stream type is only from Kafka and sink to HTTP service. Creating CloudEvents client is as simple as creating an REST API. | You have dedicated DevOps that understand Kubernetes and want adding more stack into Kubernetes. | Your source and target stream is not limited to Kafka and HTTP.                                                               |
+| Source of stream     | Kafka only                                                                                                                                                                        | Kafka, RabbitMQ, ?                                                                                                                                                                                                                               | Many [inputs](https://www.benthos.dev/docs/components/inputs/about) supported.                                                |
+| Sink type            | CloudEvents (HTTP)                                                                                                                                                                | CloudEvents (HTTP)                                                                                                                                                                                                                               | Many [outputs](https://www.benthos.dev/docs/components/outputs/about) supported.                                              |
+| Type of installation | As single binary with one database as source of truth: can be deployed in any server (VPS, or Kubernetes), so it easier to understand how to restart/stop or even backup program. | As [Kubernetes Custom Resource Definitions](https://github.com/knative/docs/blob/892540960d1082e38d3c1fccb73c62bb96af461f/docs/install/yaml-install/eventing/install-eventing-with-yaml.md), so you need a basic understanding about Kubernetes. | Single binary, but without database as coordinator.                                                                           |
+| Processor            | Not yet supported                                                                                                                                                                 | Only [trigger filter by CloudEvents attributes](https://github.com/knative/docs/blob/2498912cd14669b25bb37dc848fab2644c612f19/docs/eventing/triggers/README.md#L65)                                                                              | Support many processors, including their own mapping language: [Bloblang](https://www.benthos.dev/docs/guides/bloblang/about) |
 
 ## Getting started
 
