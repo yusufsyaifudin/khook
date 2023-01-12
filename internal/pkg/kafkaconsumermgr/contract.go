@@ -11,5 +11,5 @@ type Manager interface {
 
 type Consumer struct {
 	Namespace string
-	Label     string
+	Name      string
 }

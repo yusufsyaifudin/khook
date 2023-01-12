@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"database/sql"
 	"fmt"
 	_ "github.com/joho/godotenv/autoload"
 	_ "github.com/lib/pq"
@@ -18,7 +17,6 @@ type ServerConfig struct {
 	Storage struct {
 		KafkaConnStore struct {
 			InMemory *struct{} `yaml:"in_memory"`
-			Postgres *Postgres `yaml:"postgres"`
 			Etcd     *struct {
 				Endpoints []string `yaml:"endpoints"`
 			} `yaml:"etcd"`
@@ -48,13 +46,4 @@ func (s *ServerConfig) Load() error {
 	}
 
 	return nil
-}
-
-type Postgres struct {
-	DSN string `yaml:"dsn"`
-}
-
-func (p *Postgres) OpenConn() (db *sql.DB, err error) {
-	db, err = sql.Open("postgres", p.DSN)
-	return
 }

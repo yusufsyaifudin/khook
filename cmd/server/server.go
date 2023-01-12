@@ -11,7 +11,6 @@ import (
 	"github.com/yusufsyaifudin/khook/storage"
 	"github.com/yusufsyaifudin/khook/storage/etcd"
 	"github.com/yusufsyaifudin/khook/storage/inmem"
-	"github.com/yusufsyaifudin/khook/storage/postgres"
 	"github.com/yusufsyaifudin/khook/transport"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -60,27 +59,11 @@ func (s *Server) Run() error {
 		log.Println("kafka connection store using etcd")
 	}
 
-	if cfg.Storage.KafkaConnStore.Postgres != nil {
-		sqlDB, err := cfg.Storage.KafkaConnStore.Postgres.OpenConn()
-		if err != nil {
-			err = fmt.Errorf("cannot open db conn for kafka conn store: %w", err)
-			return err
-		}
-
-		kafkaConnStore, err = postgres.NewKafkaConnStore(postgres.WithDB(sqlDB), postgres.WithSonyFlake(sf))
-		if err != nil {
-			err = fmt.Errorf("cannot open db conn for kafka conn store: %w", err)
-			return err
-		}
-
-		log.Println("kafka connection store using postgres")
-	}
-
 	// ** Prepare Kafka client connection manager
 	var kafkaClientManager kafkaclientmgr.Manager
 	kafkaClientManager, err = kafkaclientmgr.NewKafkaClientManager(
 		kafkaclientmgr.WithConnStore(kafkaConnStore),
-		kafkaclientmgr.WithUpdateConnInterval(10*time.Second),
+		kafkaclientmgr.WithUpdateConnInterval(1*time.Hour),
 	)
 	if err != nil {
 		err = fmt.Errorf("cannot prepare kafka client connection manager: %w", err)
@@ -91,7 +74,7 @@ func (s *Server) Run() error {
 	kafkaConsumerManager, err = kafkaconsumermgr.NewKafkaConsumerManager(
 		kafkaconsumermgr.WithConnStore(kafkaConsumerStore),
 		kafkaconsumermgr.WithClientConnectionManager(kafkaClientManager),
-		kafkaconsumermgr.WithUpdateInterval(3*time.Second),
+		kafkaconsumermgr.WithUpdateInterval(1*time.Hour),
 	)
 	if err != nil {
 		err = fmt.Errorf("cannot prepare kafka consumer manager: %w", err)

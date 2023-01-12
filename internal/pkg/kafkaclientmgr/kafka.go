@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/hashicorp/go-multierror"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"github.com/yusufsyaifudin/khook/storage"
 	"golang.org/x/sync/semaphore"
 	"io"
@@ -27,20 +28,27 @@ type kafkaConnState struct {
 	Client   sarama.Client
 }
 
-type kafkaOpt struct {
+type configOption struct {
 	kafkaConnStore  storage.KafkaConnStore
 	updateConnEvery time.Duration
 }
 
 // KafkaClientManager is a manager to create and handle the Kafka connection.
 type KafkaClientManager struct {
-	kafkaOpt         *kafkaOpt
+	cfgOpt           *configOption
 	tickerUpdateConn *time.Ticker
 	sem              *semaphore.Weighted
 	kafkaConnLock    sync.RWMutex
 
 	// kafkaConnMap kafka label as key
-	kafkaConnMap map[string]*kafkaConnState
+	kafkaConnMap        map[string]*kafkaConnState
+	relabanceInProgress bool
+
+	// watch connection config changes
+	watchConnConfig chan storage.OutWatchKafkaConnConfig
+
+	// Once ensure only once operation is called when init KafkaClientManager
+	once sync.Once
 }
 
 var _ Manager = (*KafkaClientManager)(nil)
@@ -55,18 +63,29 @@ func NewKafkaClientManager(opts ...KafkaOpt) (*KafkaClientManager, error) {
 	}
 
 	svc := &KafkaClientManager{
-		kafkaOpt:         defaultOpt,
+		cfgOpt:           defaultOpt,
 		tickerUpdateConn: time.NewTicker(defaultOpt.updateConnEvery + (time.Duration(rand.Int63n(150)) * time.Millisecond)),
 		sem:              semaphore.NewWeighted(10),
 		kafkaConnLock:    sync.RWMutex{},
 		kafkaConnMap:     make(map[string]*kafkaConnState),
+		watchConnConfig:  make(chan storage.OutWatchKafkaConnConfig),
 	}
 
+	go svc.init()
+	go svc.cfgOpt.kafkaConnStore.WatchKafkaConnConfig(context.Background(), svc.watchConnConfig)
 	go svc.manageConnection()
+
 	return svc, nil
 }
 
-func (k *KafkaClientManager) getConnID(kafkaCfg storage.KafkaConnectionConfig) string {
+// init will call the
+func (k *KafkaClientManager) init() {
+	k.once.Do(func() {
+		k.updateConnections()
+	})
+}
+
+func (k *KafkaClientManager) getConnID(kafkaCfg types.KafkaBrokerConfig) string {
 	return k.getConnIDScoped(kafkaCfg.Namespace, kafkaCfg.Name)
 }
 
@@ -75,24 +94,24 @@ func (k *KafkaClientManager) getConnIDScoped(ns, name string) string {
 }
 
 // addOrRefreshConnection Add new connection, but before that, make sure the connection is not duplicate.
-func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnectionConfig) {
+func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg types.KafkaBrokerConfig) {
 	connID := k.getConnID(kafkaCfg)
 
 	k.kafkaConnLock.RLock() // lock read
 
-	isRemoveThisConn := false
 	currConn, connExist := k.kafkaConnMap[connID]
 	log.Printf(
 		"conn status label '%s' %t state not nil='%t'\n",
 		kafkaCfg.Name, connExist, currConn != nil,
 	)
 
-	checksum, err := specChecksum(kafkaCfg.Spec)
-	if err != nil {
-		log.Printf("cannot calculate checksum for spec kafka: %s\n", err)
+	checksum, errChecksum := specChecksum(kafkaCfg.Spec)
+	if errChecksum != nil {
+		log.Printf("cannot calculate checksum for spec kafka: %s\n", errChecksum)
 		return
 	}
 
+	isRemoveThisConn := false
 	if connExist && k.kafkaConnMap[connID].Checksum == checksum && currConn != nil && currConn.Client != nil {
 
 		// if connection is existed AND checksum is still same:
@@ -107,16 +126,16 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnec
 				continue // continue on the next broker, if one broker is unavailable
 			}
 
-			_err := broker.Open(saramaClientCfg)
-			if errors.Is(_err, sarama.ErrAlreadyConnected) {
+			_errBroker := broker.Open(saramaClientCfg)
+			if errors.Is(_errBroker, sarama.ErrAlreadyConnected) {
 				log.Printf("connection '%s' broker %d '%s' is still up\n", kafkaCfg.Name, idxBroker, broker.Addr())
 
-				_err = nil // discard error, so it will continue to next iteration
+				_errBroker = nil // discard error, so it will continue to next iteration
 			}
 
-			if _err != nil {
+			if _errBroker != nil {
 				// if one broker is failed, then remove it from connection list, so it can be re-connected again
-				log.Printf("connection '%s' broker %d '%s' is error: %s\n", kafkaCfg.Name, idxBroker, broker.Addr(), _err)
+				log.Printf("connection '%s' broker %d '%s' is error: %s\n", kafkaCfg.Name, idxBroker, broker.Addr(), _errBroker)
 				isRemoveThisConn = true
 				continue // continue brokers loop
 			}
@@ -124,7 +143,7 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnec
 
 	}
 
-	k.kafkaConnLock.RUnlock()
+	k.kafkaConnLock.RUnlock() // unlock read
 
 	// We will update the current connection if one of these condition return True:
 	// * isRemoveThisConn = true               -> means that one of brokers is down
@@ -136,7 +155,7 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnec
 		updateConnReasons = append(updateConnReasons, "bad broker")
 	}
 
-	if !connExist {
+	if !connExist || currConn == nil {
 		updateConnReasons = append(updateConnReasons, "connection is not exist in the list")
 	}
 
@@ -147,14 +166,13 @@ func (k *KafkaClientManager) addOrRefreshConnection(kafkaCfg storage.KafkaConnec
 	if len(updateConnReasons) > 0 {
 		k.kafkaConnLock.Lock() // unlock before return
 		saramaCfg := sarama.NewConfig()
-		kafkaConn, err := sarama.NewClient(kafkaCfg.Spec.Brokers, saramaCfg)
-		if err != nil {
-
-			// TODO: need to inform all consumer that using this connection that this connection been deleted
-			delete(k.kafkaConnMap, connID)
-
-			log.Printf("conn id %s is error to create: %s\n", kafkaCfg.Name, err)
+		kafkaConn, errClient := sarama.NewClient(kafkaCfg.Spec.Brokers, saramaCfg)
+		if errClient != nil {
+			log.Printf("conn id %s is error to create: %s\n", kafkaCfg.Name, errClient)
 			k.kafkaConnLock.Unlock() // unlock before return
+
+			// delete connection using function that we've created
+			k.deleteConn(connID, errClient.Error())
 			return
 		}
 
@@ -183,6 +201,17 @@ func (k *KafkaClientManager) manageConnection() {
 			// ping connection periodically..
 			log.Printf("update connection at %s\n", t.Format(time.RFC3339Nano))
 			k.updateConnections()
+
+		case updatedCfg := <-k.watchConnConfig:
+			log.Printf("new config updated from database: %+v", updatedCfg)
+
+			if updatedCfg.ChangeType == storage.Put {
+				k.addOrRefreshConnection(updatedCfg.Resource)
+			}
+
+			if updatedCfg.ChangeType == storage.Delete {
+				k.deleteConn(k.getConnID(updatedCfg.Resource), "got update from database")
+			}
 		}
 	}
 }
@@ -197,48 +226,51 @@ func (k *KafkaClientManager) manageConnection() {
 // Then, in another code, we can use Redis as distributed state management to
 // distribute number of consumers depending on Kafka partition.
 func (k *KafkaClientManager) updateConnections() {
-	outKafkaCfg, err := k.kafkaOpt.kafkaConnStore.GetKafkaConnConfigs(context.Background())
+
+	// ensure that only one progress update from database is occurred
+	// this to minimize burst calling into connection store when we set timer too frequently.
+	k.kafkaConnLock.RLock()
+	if k.relabanceInProgress {
+		k.kafkaConnLock.RUnlock()
+		return
+	}
+	k.kafkaConnLock.RUnlock()
+
+	outKafkaCfg, err := k.cfgOpt.kafkaConnStore.GetKafkaConnConfigs(context.Background())
 	if err != nil {
 		log.Printf("cannot list kafka config during rebalance, your connection may be outdated: %s\n", err)
 		return
 	}
 
-	k.kafkaConnLock.RLock()
-	unvisitedConn := make(map[string]struct{})
-	for connID := range k.kafkaConnMap {
-		unvisitedConn[connID] = struct{}{}
-	}
-	k.kafkaConnLock.RUnlock()
+	// set re-balance flag to true, to mitigate the same action called at the same time
+	k.kafkaConnLock.Lock()
+	k.relabanceInProgress = true
+	k.kafkaConnLock.Unlock()
 
 	ctx := context.Background()
 	wg := &sync.WaitGroup{}
 
 	for outKafkaCfg.Next() {
-		kafkaCfg, _err := outKafkaCfg.KafkaConnection()
+		kafkaCfg, _err := outKafkaCfg.KafkaBrokerConfig()
 		if _err != nil {
 			log.Printf("getting kafka config row error: %s\n", _err)
 			continue
 		}
 
 		kafkaLabel := kafkaCfg.Name
+		kafkaNs := kafkaCfg.Namespace
 		log.Printf("check conn id %s exist or not with read lock\n", kafkaLabel)
 
-		err := k.sem.Acquire(ctx, 1)
-		if err != nil {
-			log.Printf("cannot acquire lock: %s\n", err)
+		_errAcq := k.sem.Acquire(ctx, 1)
+		if _errAcq != nil {
+			log.Printf("cannot acquire lock when trying to update connection '%s' on ns '%s': %s\n", kafkaLabel, kafkaNs, _errAcq)
 			continue
 		}
-
-		// delete from unvisited.
-		// if after for loop done it still not empty, it means that the connection is not exist anymore.
-		// we can then close and delete the connection
-		connID := k.getConnID(kafkaCfg)
-		delete(unvisitedConn, connID)
 
 		// add or refresh connection if not exist using go routine
 		// so, we can have multiple try to open connection
 		wg.Add(1)
-		go func(_wg *sync.WaitGroup, _kafkaCfg storage.KafkaConnectionConfig) {
+		go func(_wg *sync.WaitGroup, _kafkaCfg types.KafkaBrokerConfig) {
 			defer func() {
 				_wg.Done()
 				k.sem.Release(1)
@@ -250,34 +282,36 @@ func (k *KafkaClientManager) updateConnections() {
 
 	wg.Wait()
 
+	// release the in progress flag
+	k.kafkaConnLock.Lock()
+	k.relabanceInProgress = false
+	k.kafkaConnLock.Unlock()
+}
+
+func (k *KafkaClientManager) deleteConn(connID string, reasons ...string) {
 	// delete unvisited connection from the connection list.
-	for connID := range unvisitedConn {
-		log.Printf("deleting kafka connection '%s' from list because not exist in storage\n", unvisitedConn)
-		k.kafkaConnLock.Lock()
-		connState, exist := k.kafkaConnMap[connID]
-		if !exist {
-			k.kafkaConnLock.Unlock()
-			continue
-		}
-
-		if connState == nil && connState.Client == nil {
-			k.kafkaConnLock.Unlock()
-			continue
-		}
-
-		// TODO: need inform the consumer that this already deleted
-
-		_err := connState.Client.Close()
-		if _err != nil {
-			log.Printf("cannot close client '%s' on unvisited connection: %s\n", connID, _err)
-			k.kafkaConnLock.Unlock()
-			continue
-		}
-
-		delete(k.kafkaConnMap, connID)
-		k.kafkaConnLock.Unlock()
+	log.Printf("deleting kafka connection '%s' because: %s\n", connID, strings.Join(reasons, "; "))
+	k.kafkaConnLock.Lock()
+	defer k.kafkaConnLock.Unlock()
+	connState, exist := k.kafkaConnMap[connID]
+	if !exist {
+		return
 	}
 
+	if connState == nil && connState.Client == nil {
+		return
+	}
+
+	// TODO: need inform the consumer that this already deleted
+
+	_err := connState.Client.Close()
+	if _err != nil {
+		log.Printf("cannot close client '%s' when %s: %s\n", connID, strings.Join(reasons, "; "), _err)
+		return
+	}
+
+	delete(k.kafkaConnMap, connID)
+	return
 }
 
 func (k *KafkaClientManager) GetAllConn(ctx context.Context) (conn []ConnInfo) {
@@ -408,7 +442,7 @@ func (k *KafkaClientManager) Close() error {
 	return errCum
 }
 
-func specChecksum(kafkaConn storage.KafkaConfigSpec) (string, error) {
+func specChecksum(kafkaConn types.KafkaBrokerSpec) (string, error) {
 	specBytes, err := json.Marshal(kafkaConn)
 	if err != nil {
 		return "", err

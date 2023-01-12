@@ -33,7 +33,7 @@ func TestItgKafkaConfigRows(t *testing.T) {
 	assert.NoError(t, err)
 
 	for rows.Next() {
-		kafkaCfg, checksum, err := rows.KafkaConnection()
+		kafkaCfg, checksum, err := rows.KafkaBrokerConfig()
 		t.Log(kafkaCfg, checksum, err)
 	}
 }

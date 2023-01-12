@@ -9,6 +9,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/sony/sonyflake"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
 	"github.com/yusufsyaifudin/khook/storage"
 	"sync"
@@ -40,7 +41,7 @@ type KafkaConfigTable struct {
 	Rev       int    `db:"rev"`
 
 	// Spec store all configuration copy of the Object
-	Spec storage.KafkaConnectionConfig `db:"spec"`
+	Spec types.KafkaBrokerConfig `db:"spec"`
 
 	// Timestamp using integer as unix microsecond in UTC
 	CreatedAt int64 `db:"created_at"`
@@ -121,7 +122,7 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 		return
 	}
 
-	kafkaCfg, err := json.Marshal(in.KafkaConfig)
+	kafkaCfg, err := json.Marshal(in.Resource)
 	if err != nil {
 		err = fmt.Errorf("cannot marshal Kafka Config to json: %w", err)
 		return
@@ -136,7 +137,7 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 	now := time.Now()
 	var kafkaConfigOut KafkaConfigTable
 	err = sqlx.GetContext(ctx, k.db, &kafkaConfigOut, SqlPersist,
-		id, in.KafkaConfig.Name, in.KafkaConfig.Namespace, kafkaCfg,
+		id, in.Resource.Name, in.Resource.Namespace, kafkaCfg,
 		now.UnixMicro(), now.UnixMicro(),
 	)
 	if err != nil {
@@ -145,7 +146,7 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 	}
 
 	out = storage.OutPersistKafkaConnConfig{
-		KafkaConfig: kafkaConfigOut.Spec,
+		Resource: kafkaConfigOut.Spec,
 	}
 	return
 }
@@ -160,7 +161,7 @@ func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGe
 	}
 
 	out = storage.OutGetKafkaConnConfig{
-		KafkaConfig: row.Spec,
+		Resource: row.Spec,
 	}
 	return
 }
@@ -193,6 +194,10 @@ func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.
 
 func (k *KafkaConnStore) WatchKafkaConnConfig(ctx context.Context, out chan storage.OutWatchKafkaConnConfig) {
 
+}
+
+func (k *KafkaConnStore) Close() error {
+	return k.db.Close()
 }
 
 type KafkaConfigRows struct {
@@ -236,8 +241,8 @@ func (k *KafkaConfigRows) Next() bool {
 		k.currRowsErr = err
 		k.stopFetchDb = true
 
-		// return true, so the first call of Next will still has the chance to call the KafkaConnectionConfig.
-		// But, since the KafkaConnectionConfig return error, user may break the loop,
+		// return true, so the first call of Next will still has the chance to call the KafkaBrokerConfig.
+		// But, since the KafkaBrokerConfig return error, user may break the loop,
 		// or if not, then stopFetchDb will stop the next iteration.
 		return true
 	}
@@ -260,12 +265,12 @@ func (k *KafkaConfigRows) Next() bool {
 	return true
 }
 
-func (k *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, error) {
+func (k *KafkaConfigRows) KafkaBrokerConfig() (types.KafkaBrokerConfig, error) {
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 
 	if k.currRowsErr != nil {
-		return storage.KafkaConnectionConfig{}, k.currRowsErr
+		return types.KafkaBrokerConfig{}, k.currRowsErr
 	}
 
 	return k.currRow.Spec, nil

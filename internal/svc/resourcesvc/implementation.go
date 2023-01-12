@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaclientmgr"
 	"github.com/yusufsyaifudin/khook/internal/pkg/kafkaconsumermgr"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"github.com/yusufsyaifudin/khook/storage"
 )
 
@@ -40,15 +41,15 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 
 	var outResource KhookResource
 	switch in.Resource.Kind {
-	case storage.KindKafkaConnection:
-		cfg := storage.NewKafkaConnectionConfig()
+	case types.KindKafkaBroker:
+		cfg := types.NewKafkaConnectionConfig()
 		cfg.Metadata.Name = in.Resource.Name
 
 		if in.Resource.Namespace != "" {
 			cfg.Metadata.Namespace = in.Resource.Namespace
 		}
 
-		var spec storage.KafkaConfigSpec
+		var spec types.KafkaBrokerSpec
 		err = json.Unmarshal(specBytes, &spec)
 		if err != nil {
 			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
@@ -59,7 +60,7 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 
 		var outPersist storage.OutPersistKafkaConnConfig
 		outPersist, err = c.Config.KafkaConnStore.PersistKafkaConnConfig(ctx, storage.InPersistKafkaConnConfig{
-			KafkaConfig: cfg,
+			Resource: cfg,
 		})
 		if err != nil {
 			err = fmt.Errorf("cannot store kafka connection config: %w", err)
@@ -67,20 +68,20 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 		}
 
 		outResource = KhookResource{
-			Type:     outPersist.KafkaConfig.Type,
-			Metadata: outPersist.KafkaConfig.Metadata,
-			Spec:     outPersist.KafkaConfig.Spec,
+			Type:     outPersist.Resource.Type,
+			Metadata: outPersist.Resource.Metadata,
+			Spec:     outPersist.Resource.Spec,
 		}
 
-	case storage.KindKafkaConsumer:
-		cfg := storage.NewKafkaConsumerConfig()
+	case types.KindKafkaConsumer:
+		cfg := types.NewKafkaConsumerConfig()
 		cfg.Metadata.Name = in.Resource.Name
 
 		if in.Resource.Namespace != "" {
 			cfg.Metadata.Namespace = in.Resource.Namespace
 		}
 
-		var spec storage.ConsumerConfigSpec
+		var spec types.ConsumerConfigSpec
 		err = json.Unmarshal(specBytes, &spec)
 		if err != nil {
 			err = fmt.Errorf("invalid kafka connnection config spec: %w", err)
@@ -91,7 +92,7 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 
 		var outPersist storage.OutPersistKafkaConsumer
 		outPersist, err = c.Config.KafkaConsumerStore.PersistKafkaConsumer(ctx, storage.InputPersistKafkaConsumer{
-			KafkaConsumerConfig: cfg,
+			Resource: cfg,
 		})
 		if err != nil {
 			err = fmt.Errorf("cannot store kafka consumer config: %w", err)
@@ -99,9 +100,9 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 		}
 
 		outResource = KhookResource{
-			Type:     outPersist.KafkaConsumerConfig.Type,
-			Metadata: outPersist.KafkaConsumerConfig.Metadata,
-			Spec:     outPersist.KafkaConsumerConfig.Spec,
+			Type:     outPersist.Resource.Type,
+			Metadata: outPersist.Resource.Metadata,
+			Spec:     outPersist.Resource.Spec,
 		}
 	default:
 		err = fmt.Errorf("cannot store resource kind=%s", in.Resource.Kind)
@@ -115,6 +116,30 @@ func (c *ConsumerManager) AddResource(ctx context.Context, in InAddResource) (ou
 	return
 }
 
+func (c *ConsumerManager) GetBrokers(ctx context.Context) (out OutGetKafkaConfigs, err error) {
+	rows, err := c.Config.KafkaConnStore.GetKafkaConnConfigs(ctx)
+	if err != nil {
+		err = fmt.Errorf("cannot get kafka configs: %w", err)
+		return
+	}
+
+	configs := make([]types.KafkaBrokerConfig, 0)
+	for rows.Next() {
+		row, err := rows.KafkaBrokerConfig()
+		if err != nil {
+			continue
+		}
+
+		configs = append(configs, row)
+	}
+
+	out = OutGetKafkaConfigs{
+		Total:   len(configs),
+		Configs: configs,
+	}
+	return
+}
+
 func (c *ConsumerManager) GetConsumers(ctx context.Context) (out OutGetWebhooks, err error) {
 	rows, err := c.Config.KafkaConsumerStore.GetKafkaConsumers(ctx)
 	if err != nil {
@@ -122,7 +147,7 @@ func (c *ConsumerManager) GetConsumers(ctx context.Context) (out OutGetWebhooks,
 		return
 	}
 
-	consumers := make([]storage.KafkaConsumerConfig, 0)
+	consumers := make([]types.KafkaConsumerConfig, 0)
 	for rows.Next() {
 		row, err := rows.KafkaConsumerConfig()
 		if err != nil {
@@ -133,6 +158,7 @@ func (c *ConsumerManager) GetConsumers(ctx context.Context) (out OutGetWebhooks,
 	}
 
 	out = OutGetWebhooks{
+		Total:     len(consumers),
 		Consumers: consumers,
 	}
 	return
@@ -150,24 +176,33 @@ func (c *ConsumerManager) GetActiveKafkaConfigs(ctx context.Context) (out OutGet
 }
 
 // GetActiveConsumers get active webhook that running in this program.
-func (c *ConsumerManager) GetActiveConsumers(ctx context.Context) (out OutGetActiveConsumers, err error) {
+func (c *ConsumerManager) GetActiveConsumers(ctx context.Context) (out OutGetActiveConsumers) {
 	consumers := c.Config.KafkaConsumerManager.GetActiveConsumers(ctx)
 
-	activeConsumers := make([]storage.KafkaConsumerConfig, 0)
+	problemConsumer := make([]ProblematicConsumer, 0)
+	activeConsumers := make([]types.KafkaConsumerConfig, 0)
 	for _, consumer := range consumers {
 		sinkTarget, err := c.Config.KafkaConsumerStore.GetKafkaConsumer(ctx, storage.InGetKafkaConsumer{
 			Namespace: consumer.Namespace,
-			Name:      consumer.Label,
+			Name:      consumer.Name,
 		})
 		if err != nil {
+			problemConsumer = append(problemConsumer, ProblematicConsumer{
+				Problem:   err.Error(),
+				Namespace: consumer.Namespace,
+				Name:      consumer.Name,
+			})
 			continue
 		}
 
-		activeConsumers = append(activeConsumers, sinkTarget.KafkaConsumerConfig)
+		activeConsumers = append(activeConsumers, sinkTarget.Resource)
 	}
 
 	out = OutGetActiveConsumers{
-		Consumers: activeConsumers,
+		TotalActive:          len(activeConsumers),
+		ConsumersActive:      activeConsumers,
+		TotalProblematic:     len(problemConsumer),
+		ConsumersProblematic: problemConsumer,
 	}
 	return
 }

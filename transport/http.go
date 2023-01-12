@@ -10,16 +10,13 @@ import (
 )
 
 const (
-	RoutePutResource              = "/resources"
-	RouteGetRegisteredWebhooks    = "/webhooks"
-	RouteAddRegisteredWebhooks    = "/webhooks/{label}"
-	RoutePauseRegisteredWebhooks  = "/webhooks/{label}/pause"
-	RouteResumeRegisteredWebhooks = "/webhooks/{label}/resume"
+	RoutePutAddResource         = "/api/v1/resources"
+	RouteGetRegisteredBrokers   = "/api/v1/resources/brokers"
+	RouteGetRegisteredConsumers = "/api/v1/resources/consumers"
 
-	RouteGetStatsSystem         = "/stats/system"
-	RouteGetStatsActiveKafka    = "/stats/active-kafka"
-	RouteGetStatsActiveWebhooks = "/stats/active-webhooks"
-	RouteGetStatsPausedWebhooks = "/stats/paused-webhooks"
+	RouteGetStatsSystem          = "/api/v1/stats/system"
+	RouteGetStatsActiveBrokers   = "/api/v1/stats/active-brokers"
+	RouteGetStatsActiveConsumers = "/api/v1/stats/active-consumers"
 )
 
 type HttpCfg struct {
@@ -47,17 +44,56 @@ func NewHTTP(cfg HttpCfg) *HTTP {
 }
 
 func (h *HTTP) registerRoutes() {
-	h.router.Get(RouteGetRegisteredWebhooks, func(w http.ResponseWriter, r *http.Request) {
+	h.router.Put(RoutePutAddResource, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		outGetWebhooks, err := h.Cfg.ResourceSvc.GetConsumers(ctx)
+		var reqBody resourcesvc.InAddResource
+		bodyDec := json.NewDecoder(r.Body)
+		err := bodyDec.Decode(&reqBody)
 		if err != nil {
 			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
 			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
 			return
 		}
 
-		respBody := respbuilder.Success(ctx, outGetWebhooks)
+		outAdd, err := h.Cfg.ResourceSvc.AddResource(ctx, reqBody)
+		if err != nil {
+			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
+			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
+			return
+		}
+
+		respBody := respbuilder.Success(ctx, outAdd)
+		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
+		return
+	})
+
+	h.router.Get(RouteGetRegisteredBrokers, func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		outGetBrokers, err := h.Cfg.ResourceSvc.GetBrokers(ctx)
+		if err != nil {
+			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
+			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
+			return
+		}
+
+		respBody := respbuilder.Success(ctx, outGetBrokers)
+		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
+		return
+	})
+
+	h.router.Get(RouteGetRegisteredConsumers, func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		outGetConsumers, err := h.Cfg.ResourceSvc.GetConsumers(ctx)
+		if err != nil {
+			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
+			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
+			return
+		}
+
+		respBody := respbuilder.Success(ctx, outGetConsumers)
 		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
 		return
 	})
@@ -84,7 +120,7 @@ func (h *HTTP) registerRoutes() {
 		return
 	})
 
-	h.router.Get(RouteGetStatsActiveKafka, func(w http.ResponseWriter, r *http.Request) {
+	h.router.Get(RouteGetStatsActiveBrokers, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		conn := h.Cfg.ResourceSvc.GetActiveKafkaConfigs(ctx)
 		respBody := respbuilder.Success(ctx, conn)
@@ -92,41 +128,10 @@ func (h *HTTP) registerRoutes() {
 		return
 	})
 
-	h.router.Put(RoutePutResource, func(w http.ResponseWriter, r *http.Request) {
+	h.router.Get(RouteGetStatsActiveConsumers, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-
-		var reqBody resourcesvc.InAddResource
-		bodyDec := json.NewDecoder(r.Body)
-		err := bodyDec.Decode(&reqBody)
-		if err != nil {
-			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
-			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
-			return
-		}
-
-		outAdd, err := h.Cfg.ResourceSvc.AddResource(ctx, reqBody)
-		if err != nil {
-			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
-			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
-			return
-		}
-
-		respBody := respbuilder.Success(ctx, outAdd)
-		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
-		return
-	})
-
-	h.router.Get(RouteGetStatsActiveWebhooks, func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		activeWebhooks, err := h.Cfg.ResourceSvc.GetActiveConsumers(ctx)
-		if err != nil {
-			respBody := respbuilder.Error(ctx, respbuilder.ErrValidation, err)
-			respbuilder.WriteJSON(http.StatusUnprocessableEntity, w, r, respBody)
-			return
-		}
-
-		respBody := respbuilder.Success(ctx, activeWebhooks)
+		activeConsumers := h.Cfg.ResourceSvc.GetActiveConsumers(ctx)
+		respBody := respbuilder.Success(ctx, activeConsumers)
 		respbuilder.WriteJSON(http.StatusOK, w, r, respBody)
 		return
 	})

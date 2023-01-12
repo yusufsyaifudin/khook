@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/yusufsyaifudin/khook/internal/pkg/sipper/sippercloudevents"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"github.com/yusufsyaifudin/khook/pkg/validator"
-	"github.com/yusufsyaifudin/khook/storage"
 )
 
-func SelectProcessor(label string, target storage.SinkTarget, chanReadyOrErr chan error) (sarama.ConsumerGroupHandler, error) {
+func SelectProcessor(label string, target types.SinkTarget, chanReadyOrErr chan error) (sarama.ConsumerGroupHandler, error) {
 	err := validator.Validate(target)
 	if err != nil {
 		err = fmt.Errorf("validation error on sink target: %w", err)

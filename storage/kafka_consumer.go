@@ -1,19 +1,25 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"github.com/yusufsyaifudin/khook/pkg/types"
+	"io"
+)
 
 type KafkaConsumerStore interface {
+	io.Closer
 	PersistKafkaConsumer(ctx context.Context, in InputPersistKafkaConsumer) (out OutPersistKafkaConsumer, err error)
 	GetKafkaConsumers(ctx context.Context) (out KafkaConsumerRows, err error)
 	GetKafkaConsumer(ctx context.Context, in InGetKafkaConsumer) (out OutGetKafkaConsumer, err error)
+	WatchKafkaConsumer(ctx context.Context, out chan OutWatchKafkaConsumer)
 }
 
 type InputPersistKafkaConsumer struct {
-	KafkaConsumerConfig KafkaConsumerConfig `validate:"required"`
+	Resource types.KafkaConsumerConfig `validate:"required"`
 }
 
 type OutPersistKafkaConsumer struct {
-	KafkaConsumerConfig KafkaConsumerConfig
+	Resource types.KafkaConsumerConfig
 }
 
 type InGetKafkaConsumer struct {
@@ -22,11 +28,16 @@ type InGetKafkaConsumer struct {
 }
 
 type OutGetKafkaConsumer struct {
-	KafkaConsumerConfig KafkaConsumerConfig
+	Resource types.KafkaConsumerConfig
+}
+
+type OutWatchKafkaConsumer struct {
+	ChangeType ChangeType
+	Resource   types.KafkaConsumerConfig
 }
 
 // KafkaConsumerRows contains list of KafkaConsumerConfig
 type KafkaConsumerRows interface {
 	Next() bool
-	KafkaConsumerConfig() (w KafkaConsumerConfig, err error)
+	KafkaConsumerConfig() (w types.KafkaConsumerConfig, err error)
 }

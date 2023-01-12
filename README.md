@@ -46,12 +46,12 @@ For now, the only way to run is build from source. `git clone` this project and 
 Ensure that your Kafka broker is ready. Change `localhost:9092` to your Kafka Broker addresses.
 
 ```shell
-curl -L -X PUT 'localhost:3333/resources' -H 'Content-Type: application/json' --data-raw '{
+curl -L -X PUT 'localhost:3333/api/v1/resources' -H 'Content-Type: application/json' --data-raw '{
     "resource": {
         "apiVersion": "khook/v1",
-        "kind": "KafkaBrokerConnection",
+        "kind": "KafkaBroker",
         "name": "my-connection",
-        "namespace": "my-ns",
+        "namespace": "my-team",
         "spec": {
             "brokers": [
                 "localhost:9092"
@@ -64,22 +64,22 @@ curl -L -X PUT 'localhost:3333/resources' -H 'Content-Type: application/json' --
 ### Add new consumer
 
 ```shell
-curl -L -X PUT 'localhost:3333/resources' -H 'Content-Type: application/json' --data-raw '{
+curl -L -X PUT 'localhost:3333/api/v1/resources' -H 'Content-Type: application/json' --data-raw '{
     "resource": {
         "apiVersion": "khook/v1",
         "kind": "KafkaConsumer",
         "name": "my-consumer",
-        "namespace": "my-ns",
+        "namespace": "my-team",
         "spec": {
             "selector": {
                 "name": "my-connection",
-                "kafka_topic": "kafka-topic-test"
+                "kafka_topic": "benthos-test"
             },
             "sinkTarget": {
                 "type": "cloudevents",
                 "cloudevents": {
-                    "url": "https://example.com",
-                    "type": "my-event"
+                    "url": "https://eoljmnied6huesi.m.pipedream.net",
+                    "type": "payment-event"
                 }
             }
         }
@@ -89,6 +89,12 @@ curl -L -X PUT 'localhost:3333/resources' -H 'Content-Type: application/json' --
 
 Change `https://example.com` to your HTTP URL or use http://pipedream.com/ for testing purpose.
 Ensure that `kafka-topic-test` is ready in your Kafka broker.
+
+### Ensure that the stream is connected
+
+```shell
+curl -L -X GET 'localhost:3333/api/v1/stats/active-consumers'
+```
 
 ### Publish Event to Kafka
 

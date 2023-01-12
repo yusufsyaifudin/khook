@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"github.com/yusufsyaifudin/khook/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"io"
+	"sort"
 	"sync"
 	"time"
 )
@@ -62,9 +64,9 @@ func NewKafkaConnStore(opts ...Option) (*KafkaConnStore, error) {
 }
 
 func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.InPersistKafkaConnConfig) (out storage.OutPersistKafkaConnConfig, err error) {
-	key := fmt.Sprintf("%s:%s:%s", prefixKey, in.KafkaConfig.Metadata.Namespace, in.KafkaConfig.Metadata.Name)
+	key := fmt.Sprintf("%s:%s:%s", prefixKey, in.Resource.Metadata.Namespace, in.Resource.Metadata.Name)
 
-	data, err := json.Marshal(in.KafkaConfig)
+	data, err := json.Marshal(in.Resource)
 	if err != nil {
 		return
 	}
@@ -75,15 +77,15 @@ func (k *KafkaConnStore) PersistKafkaConnConfig(ctx context.Context, in storage.
 	}
 
 	getConnOut, err := k.GetKafkaConnConfig(ctx, storage.InGetKafkaConnConfig{
-		Namespace: in.KafkaConfig.Metadata.Namespace,
-		Name:      in.KafkaConfig.Metadata.Name,
+		Namespace: in.Resource.Metadata.Namespace,
+		Name:      in.Resource.Metadata.Name,
 	})
 	if err != nil {
 		return
 	}
 
 	out = storage.OutPersistKafkaConnConfig{
-		KafkaConfig: getConnOut.KafkaConfig,
+		Resource: getConnOut.Resource,
 	}
 	return
 }
@@ -103,14 +105,14 @@ func (k *KafkaConnStore) GetKafkaConnConfig(ctx context.Context, in storage.InGe
 	}
 
 	kv := getResp.Kvs[0]
-	var kafkaConn storage.KafkaConnectionConfig
+	var kafkaConn types.KafkaBrokerConfig
 	err = json.Unmarshal(kv.Value, &kafkaConn)
 	if err != nil {
 		return
 	}
 
 	out = storage.OutGetKafkaConnConfig{
-		KafkaConfig: kafkaConn,
+		Resource: kafkaConn,
 	}
 	return
 }
@@ -121,13 +123,13 @@ func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.
 		return
 	}
 
-	kafkaConfigs := make([]storage.KafkaConnectionConfig, 0)
+	kafkaConfigs := make([]types.KafkaBrokerConfig, 0)
 	for _, kv := range getResp.Kvs {
 		if kv == nil {
 			continue
 		}
 
-		var kafkaConn storage.KafkaConnectionConfig
+		var kafkaConn types.KafkaBrokerConfig
 		_err := json.Unmarshal(kv.Value, &kafkaConn)
 		if _err != nil {
 			continue
@@ -135,6 +137,10 @@ func (k *KafkaConnStore) GetKafkaConnConfigs(ctx context.Context) (rows storage.
 
 		kafkaConfigs = append(kafkaConfigs, kafkaConn)
 	}
+
+	sort.Slice(kafkaConfigs, func(i, j int) bool {
+		return kafkaConfigs[i].Name < kafkaConfigs[j].Name
+	})
 
 	rows = &KafkaConfigRows{
 		kafkaConfigs: kafkaConfigs,
@@ -150,7 +156,7 @@ func (k *KafkaConnStore) WatchKafkaConnConfig(ctx context.Context, out chan stor
 				continue
 			}
 
-			var kafkaConn storage.KafkaConnectionConfig
+			var kafkaConn types.KafkaBrokerConfig
 			err := json.Unmarshal(ev.Kv.Value, &kafkaConn)
 			if err != nil {
 				continue
@@ -165,17 +171,21 @@ func (k *KafkaConnStore) WatchKafkaConnConfig(ctx context.Context, out chan stor
 			}
 
 			out <- storage.OutWatchKafkaConnConfig{
-				ChangeType:  changeType,
-				KafkaConfig: kafkaConn,
+				ChangeType: changeType,
+				Resource:   kafkaConn,
 			}
 		}
 	}
 }
 
+func (k *KafkaConnStore) Close() error {
+	return k.client.Close()
+}
+
 type KafkaConfigRows struct {
 	lock            sync.Mutex
-	kafkaConfigs    []storage.KafkaConnectionConfig
-	currKafkaConfig *storage.KafkaConnectionConfig
+	kafkaConfigs    []types.KafkaBrokerConfig
+	currKafkaConfig *types.KafkaBrokerConfig
 }
 
 var _ storage.KafkaConnConfigRows = (*KafkaConfigRows)(nil)
@@ -192,11 +202,11 @@ func (w *KafkaConfigRows) Next() bool {
 	return false
 }
 
-func (w *KafkaConfigRows) KafkaConnection() (storage.KafkaConnectionConfig, error) {
+func (w *KafkaConfigRows) KafkaBrokerConfig() (types.KafkaBrokerConfig, error) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if w.currKafkaConfig == nil {
-		return storage.KafkaConnectionConfig{}, io.ErrUnexpectedEOF
+		return types.KafkaBrokerConfig{}, io.ErrUnexpectedEOF
 	}
 
 	return *w.currKafkaConfig, nil

@@ -10,7 +10,7 @@ import (
 	"github.com/cloudevents/sdk-go/v2/protocol"
 	cehttp "github.com/cloudevents/sdk-go/v2/protocol/http"
 	"github.com/google/uuid"
-	"github.com/yusufsyaifudin/khook/storage"
+	"github.com/yusufsyaifudin/khook/pkg/types"
 	"log"
 	"net/http"
 	"time"
@@ -21,14 +21,14 @@ import (
 // CloudEventSink represents a Sarama consumer group consumer
 type CloudEventSink struct {
 	label                  string
-	webhookCfg             storage.SinkTarget
+	webhookCfg             types.SinkTarget
 	chanReadyOrErr         chan error
 	cloudEventHTTPProtocol protocol.Sender
 }
 
 var _ sarama.ConsumerGroupHandler = (*CloudEventSink)(nil)
 
-func NewCloudEventSink(label string, webhookCfg storage.SinkTarget, chanReadyOrErr chan error) *CloudEventSink {
+func NewCloudEventSink(label string, webhookCfg types.SinkTarget, chanReadyOrErr chan error) *CloudEventSink {
 	return &CloudEventSink{
 		label:          label,
 		webhookCfg:     webhookCfg,

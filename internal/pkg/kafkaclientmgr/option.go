@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-func defaultKafkaOpt() *kafkaOpt {
-	return &kafkaOpt{
+func defaultKafkaOpt() *configOption {
+	return &configOption{
 		kafkaConnStore:  inmem.NewKafkaConnStore(),
 		updateConnEvery: 10 * time.Second,
 	}
 }
 
-type KafkaOpt func(opt *kafkaOpt) error
+type KafkaOpt func(opt *configOption) error
 
 func WithConnStore(store storage.KafkaConnStore) KafkaOpt {
-	return func(opt *kafkaOpt) error {
+	return func(opt *configOption) error {
 		if store == nil {
 			return fmt.Errorf("nil KafkaConnStore")
 		}
@@ -27,7 +27,7 @@ func WithConnStore(store storage.KafkaConnStore) KafkaOpt {
 	}
 }
 func WithUpdateConnInterval(interval time.Duration) KafkaOpt {
-	return func(opt *kafkaOpt) error {
+	return func(opt *configOption) error {
 		if interval.Seconds() <= 0 {
 			return nil
 		}

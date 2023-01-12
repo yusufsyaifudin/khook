@@ -1,7 +1,6 @@
-package storage
+package types
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -42,7 +41,7 @@ type ConsumerConfigSpec struct {
 // SinkTarget contains contract on how sink is processed.
 // Detail implementation would be in internal/pkg/kafkaconsumermgr
 // The minimal and easiest to understand of SinkTarget is CloudEvents,
-// where message from KafkaConnectionConfig (in specific topic) is sent via HTTP
+// where message from KafkaBrokerConfig (in specific topic) is sent via HTTP
 // as specified in the CloudEvents.URL as CloudEvents message.
 type SinkTarget struct {
 	Type        string       `json:"type,omitempty" validate:"required"`
@@ -58,22 +57,6 @@ func (m SinkTarget) Validate() error {
 	default:
 		return fmt.Errorf("unknown type '%s' on sink target as consumer processor", m.Type)
 	}
-}
-
-// Scan will read the data bytes from database and parse it as SinkTarget
-func (m *SinkTarget) Scan(src interface{}) error {
-	if m == nil {
-		return fmt.Errorf("error scan sink target on nil struct")
-	}
-
-	switch v := src.(type) {
-	case []byte:
-		return json.Unmarshal(v, m)
-	case string:
-		return json.Unmarshal([]byte(fmt.Sprintf("%s", v)), m)
-	}
-
-	return fmt.Errorf("unknown type %T to format as sink target", src)
 }
 
 type CloudEvents struct {
